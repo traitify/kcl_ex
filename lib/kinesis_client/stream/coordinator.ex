@@ -240,10 +240,10 @@ defmodule KinesisClient.Stream.Coordinator do
     {:ok, result} =
       case shard_start_id do
         nil ->
-          Kinesis.describe_stream(stream_name, kinesis_opts)
+          describe_stream_with_retry(stream_name, kinesis_opts)
 
         x when is_binary(x) ->
-          Kinesis.describe_stream(
+          describe_stream_with_retry(
             stream_name,
             Keyword.merge(kinesis_opts, exclusive_start_shard_id: x)
           )
@@ -261,6 +261,11 @@ defmodule KinesisClient.Stream.Coordinator do
       %{"StreamDescription" => %{"HasMoreShards" => false, "Shards" => shards} = stream} ->
         stream |> Map.put("Shards", shards ++ shard_list)
     end
+  end
+
+  @retry with: exponential_backoff(500) |> Stream.take(10)
+  defp describe_stream_with_retry(stream_name, kinesis_opts) do
+    Kinesis.describe_stream(stream_name, kinesis_opts)
   end
 
   defp add_vertex(graph, shard_id) do
