@@ -5,6 +5,7 @@ defmodule KinesisClient.Stream.Coordinator do
   stream is processed completely and in the correct order.
   """
   use GenServer
+  use Retry.Annotation
   require Logger
   alias KinesisClient.Kinesis
   alias KinesisClient.Stream.Shard
