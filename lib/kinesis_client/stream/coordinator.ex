@@ -110,6 +110,9 @@ defmodule KinesisClient.Stream.Coordinator do
 
         state = %{state | shard_map: shard_map}
 
+        IO.inspect(shard_graph, "describe_stream: shard_graph")
+        IO.inspect(state, "describe_stream: state")
+
         map = start_shards(shard_graph, state)
 
         {:noreply, %{state | shard_graph: shard_graph, shard_ref_map: map}}
@@ -157,7 +160,11 @@ defmodule KinesisClient.Stream.Coordinator do
     shard_r = list_relationships(shard_graph)
 
     Enum.reduce(shard_r, state.shard_ref_map, fn {shard_id, parents}, acc ->
-      shard_lease = get_lease(shard_id, state)
+      shard_lease =
+        get_lease(shard_id, state) |> IO.inspect(label: "start_shards: get_lease(shard_id, state)")
+
+      IO.inspect(shard_id, label: "start_shards: shard_id")
+      IO.inspect(parents, label: "start_shards: parents")
 
       case parents do
         [] ->
