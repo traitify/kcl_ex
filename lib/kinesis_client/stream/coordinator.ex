@@ -110,8 +110,8 @@ defmodule KinesisClient.Stream.Coordinator do
 
         state = %{state | shard_map: shard_map}
 
-        IO.inspect(shard_graph, "describe_stream: shard_graph")
-        IO.inspect(state, "describe_stream: state")
+        IO.inspect(shard_graph, label: "describe_stream: shard_graph")
+        IO.inspect(state, label: "describe_stream: state")
 
         map = start_shards(shard_graph, state)
 
