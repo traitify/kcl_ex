@@ -114,14 +114,16 @@ defmodule KinesisClient.Stream.CoordinatorTest do
 
     {:ok, _} = start_coordinator(opts)
 
-    assert_receive {:shards, shards}, 5_000
-    assert_receive {:shard_started, %{pid: pid, shard_id: "shardId-000000000000"}}, 5_000
-    assert Process.alive?(pid) == true
-    assert_receive {:shard_started, %{pid: pid, shard_id: "shardId-000000000001"}}, 5_000
-    assert Process.alive?(pid) == true
+    assert_receive {:shards, shards}, 100
+    assert_receive {:shard_started, %{pid: pid_0, shard_id: "shardId-000000000000"}}, 100
+    assert Process.alive?(pid_0) == true
+    assert_receive {:shard_started, %{pid: pid_1, shard_id: "shardId-000000000001"}}, 100
+    assert Process.alive?(pid_1) == true
 
-    refute_receive {:shard_started, %{pid: _, shard_id: "shardId-000000000002"}}, 5_000
-    refute_receive {:shard_started, %{pid: _, shard_id: "shardId-000000000003"}}, 5_000
+    refute_receive {:shard_started, %{pid: _, shard_id: "shardId-000000000002"}}, 200
+    assert Process.alive?(pid_0) == true
+    refute_receive {:shard_started, %{pid: _, shard_id: "shardId-000000000003"}}, 200
+    assert Process.alive?(pid_1) == true
 
     assert Enum.empty?(shards) == false
   end
@@ -159,12 +161,12 @@ defmodule KinesisClient.Stream.CoordinatorTest do
 
     {:ok, _} = start_coordinator(opts)
 
-    assert_receive {:shards, shards}, 5_000
-    assert_receive {:shard_started, %{pid: _, shard_id: "shardId-000000000001"}}, 5_000
-    assert_receive {:shard_started, %{pid: _, shard_id: "shardId-000000000002"}}, 5_000
-    assert_receive {:shard_started, %{pid: _, shard_id: "shardId-000000000003"}}, 5_000
+    assert_receive {:shards, shards}, 100
+    assert_receive {:shard_started, %{pid: _, shard_id: "shardId-000000000001"}}, 100
+    assert_receive {:shard_started, %{pid: _, shard_id: "shardId-000000000002"}}, 100
+    assert_receive {:shard_started, %{pid: _, shard_id: "shardId-000000000003"}}, 100
 
-    refute_receive {:shard_started, %{pid: _, shard_id: "shardId-000000000000"}}, 5_000
+    refute_receive {:shard_started, %{pid: _, shard_id: "shardId-000000000000"}}, 100
 
     assert Enum.empty?(shards) == false
   end
