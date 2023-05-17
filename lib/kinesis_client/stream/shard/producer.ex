@@ -230,6 +230,10 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
       {:ok, %{"ShardIterator" => iterator}} ->
         get_records(%{state | shard_iterator: iterator})
+
+      {:error, {"ResourceNotFoundException", error_message}} ->
+        Logger.error(error_message, state)
+        {:noreply, [], %{status: :closed}}
     end
   end
 
@@ -268,7 +272,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
   end
 
   defp get_shard_iterator(%{shard_iterator_type: :after_sequence_number} = state) do
-    Kinesis.get_shard_iterator(
+    get_shard_iterator_with_retry(
       state.stream_name,
       state.shard_id,
       :after_sequence_number,
@@ -281,11 +285,21 @@ defmodule KinesisClient.Stream.Shard.Producer do
   end
 
   defp get_shard_iterator(%{shard_iterator_type: :trim_horizon} = state) do
-    Kinesis.get_shard_iterator(
+    get_shard_iterator_with_retry(
       state.stream_name,
       state.shard_id,
       :trim_horizon,
       state.kinesis_opts
+    )
+  end
+
+  @retry with: exponential_backoff(500) |> Stream.take(5)
+  defp get_shard_iterator_with_retry(stream_name, shard_id, shard_iterator_type, kinesis_opts) do
+    Kinesis.get_shard_iterator(
+      stream_name,
+      shard_id,
+      shard_iterator_type,
+      kinesis_opts
     )
   end
 
