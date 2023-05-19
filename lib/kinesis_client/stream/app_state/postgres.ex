@@ -3,7 +3,6 @@ defmodule KinesisClient.Stream.AppState.Postgres do
 
   alias KinesisClient.Stream.AppState.Adapter, as: AppStateAdapter
   alias KinesisClient.Stream.AppState.Postgres.PostgresMigration
-  alias KinesisClient.Stream.AppState.Postgres.ShardLease
   alias KinesisClient.Stream.AppState.Postgres.ShardLeases
 
   @behaviour AppStateAdapter
@@ -25,7 +24,7 @@ defmodule KinesisClient.Stream.AppState.Postgres do
       lease_count: 1
     }
 
-    with :ok <- repo.insert(ShardLease.changeset(%ShardLease{}, attrs)) do
+    with {:ok, _} <- ShardLeases.insert_shard_lease(attrs, repo) do
       :ok
     else
       {:error, changeset} ->
