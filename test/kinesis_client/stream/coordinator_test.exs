@@ -12,6 +12,15 @@ defmodule KinesisClient.Stream.CoordinatorTest do
     :ok
   end
 
+  test "#remove_missing_parents" do
+    %{"StreamDescription" => %{"Shards" => shards}} =
+      KinesisClient.KinesisResponses.describe_stream()
+
+    shards = shards |> Coordinator.remove_missing_parents()
+    first_shard = Enum.at(shards, 0)
+    assert first_shard["ParentShardId"] == nil
+  end
+
   test "describes kinesis stream and starts shards" do
     {:ok, _} =
       start_supervised({DynamicSupervisor, [strategy: :one_for_one, name: @supervisor_name]})
