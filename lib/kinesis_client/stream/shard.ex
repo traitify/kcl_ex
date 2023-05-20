@@ -1,8 +1,11 @@
 defmodule KinesisClient.Stream.Shard do
   @moduledoc false
   use Supervisor, restart: :transient
-  alias KinesisClient.Stream.Shard.{Lease, Pipeline}
+
   import KinesisClient.Util
+
+  alias KinesisClient.Stream.Shard.Lease
+  alias KinesisClient.Stream.Shard.Pipeline
 
   def start_link(args) do
     Supervisor.start_link(__MODULE__, args, name: args[:shard_name])

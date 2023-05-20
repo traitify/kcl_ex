@@ -62,7 +62,8 @@ defmodule KinesisClient.Mixfile do
       {:jason, "~> 1.1"},
       {:mix_test_watch, "~> 1.0", only: :dev, runtime: false},
       {:mox, "~> 0.5", only: :test},
-      {:retry, "~> 0.14"}
+      {:retry, "~> 0.14"},
+      {:styler, "~> 0.7", only: [:dev, :test], runtime: false}
     ]
   end
 end

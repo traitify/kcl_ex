@@ -1,8 +1,9 @@
 defmodule KinesisClient.Stream.CoordinatorTest do
   use KinesisClient.Case, async: false
 
-  alias KinesisClient.Stream.Coordinator
   alias KinesisClient.Stream.AppState.ShardLease
+  alias KinesisClient.Stream.Coordinator
+
   @stream_name "decline-roman-empire-test"
   @shard_count 6
   @supervisor_name MyShardSupervisor
@@ -16,9 +17,11 @@ defmodule KinesisClient.Stream.CoordinatorTest do
     %{"StreamDescription" => %{"Shards" => shards}} =
       KinesisClient.KinesisResponses.describe_stream()
 
-    shards = shards |> Coordinator.remove_missing_parents()
+    shards = Coordinator.remove_missing_parents(shards)
     first_shard = Enum.at(shards, 0)
+    second_shard = Enum.at(shards, 1)
     assert first_shard["ParentShardId"] == nil
+    assert second_shard["ParentShardId"] == first_shard["ShardId"]
   end
 
   test "describes kinesis stream and starts shards" do

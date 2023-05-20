@@ -6,10 +6,12 @@ defmodule KinesisClient.Stream.Coordinator do
   """
   use GenServer
   use Retry.Annotation
-  require Logger
+
   alias KinesisClient.Kinesis
-  alias KinesisClient.Stream.Shard
   alias KinesisClient.Stream.AppState
+  alias KinesisClient.Stream.Shard
+
+  require Logger
 
   defstruct [
     :name,
@@ -93,17 +95,13 @@ defmodule KinesisClient.Stream.Coordinator do
     AppState.initialize(state.app_name, state.app_state_opts)
   end
 
-  @spec remove_missing_parents(Map.t) :: Map.t
+  @spec remove_missing_parents(Map.t()) :: Map.t()
   def remove_missing_parents(shards) do
-    shards |> Enum.map(fn shard ->
-      case Enum.any?(shards, fn %{"ShardId" => shard_id} ->
-        shard_id == shard["ParentShardId"]
-      end) do
-        true ->
-          shard
-
-        false ->
-          Map.delete(shard, "ParentShardId")
+    Enum.map(shards, fn shard ->
+      if Enum.any?(shards, fn %{"ShardId" => shard_id} -> shard_id == shard["ParentShardId"] end) do
+        shard
+      else
+        Map.delete(shard, "ParentShardId")
       end
     end)
   end
@@ -112,7 +110,7 @@ defmodule KinesisClient.Stream.Coordinator do
     %{"StreamStatus" => status, "Shards" => shards} =
       get_shards(state.stream_name, state.kinesis_opts)
 
-    shards = shards |> remove_missing_parents()
+    shards = remove_missing_parents(shards)
 
     notify({:shards, shards}, state)
 
@@ -175,12 +173,15 @@ defmodule KinesisClient.Stream.Coordinator do
 
   defp start_shards(shard_graph, %__MODULE__{} = state) do
     shard_r =
-      list_relationships(shard_graph)
+      shard_graph
+      |> list_relationships()
       |> IO.inspect(label: "start_shards: list_relationships(shard_graph)")
 
     Enum.reduce(shard_r, state.shard_ref_map, fn {shard_id, parents}, acc ->
       shard_lease =
-        get_lease(shard_id, state) |> IO.inspect(label: "start_shards: get_lease(shard_id, state)")
+        shard_id
+        |> get_lease(state)
+        |> IO.inspect(label: "start_shards: get_lease(shard_id, state)")
 
       IO.inspect(shard_id, label: "start_shards: shard_id")
       IO.inspect(parents, label: "start_shards: parents")
@@ -200,7 +201,7 @@ defmodule KinesisClient.Stream.Coordinator do
         # handle shard splits
         [single_parent] ->
           # ef - this is returning :not_found
-          case get_lease(single_parent, state) |> IO.inspect(label: "single_parent") do
+          case single_parent |> get_lease(state) |> IO.inspect(label: "single_parent") do
             %{completed: true} ->
               # ef - does this need to handle completed and :not_found? should we start the child if the parent is not found? or start the parent and the child?
               # ef - I think we start the parent and not the child? the child will be started when the parent is completed
@@ -294,11 +295,11 @@ defmodule KinesisClient.Stream.Coordinator do
         )
 
       %{"StreamDescription" => %{"HasMoreShards" => false, "Shards" => shards} = stream} ->
-        stream |> Map.put("Shards", shards ++ shard_list)
+        Map.put(stream, "Shards", shards ++ shard_list)
     end
   end
 
-  @retry with: exponential_backoff(500) |> Stream.take(10)
+  @retry with: 500 |> exponential_backoff() |> Stream.take(10)
   defp describe_stream_with_retry(stream_name, kinesis_opts) do
     Kinesis.describe_stream(stream_name, kinesis_opts)
   end

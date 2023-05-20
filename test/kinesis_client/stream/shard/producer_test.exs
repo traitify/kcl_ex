@@ -74,12 +74,11 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
       {:ok, %{"NextShardIterator" => "foo", "MillisBehindLatest" => 5_000, "Records" => records}}
     end)
 
-    AppStateMock
-    |> expect(:update_checkpoint, fn in_app_name,
-                                     in_shard_id,
-                                     in_lease_owner,
-                                     in_checkpoint,
-                                     _opts ->
+    expect(AppStateMock, :update_checkpoint, fn in_app_name,
+                                                in_shard_id,
+                                                in_lease_owner,
+                                                in_checkpoint,
+                                                _opts ->
       assert in_app_name == opts[:app_name]
       assert in_shard_id == opts[:shard_id]
       assert in_lease_owner == opts[:lease_owner]
@@ -112,6 +111,7 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
 end
 
 defmodule KinesisClient.TestConsumer do
+  @moduledoc false
   use GenStage
 
   def start_link(notify_pid) do

@@ -1,10 +1,12 @@
 defmodule KinesisClient.Stream.Shard.Lease do
   @moduledoc false
-  require Logger
   use GenServer
+
   alias KinesisClient.Stream.AppState
   alias KinesisClient.Stream.AppState.ShardLease
   alias KinesisClient.Stream.Shard.Pipeline
+
+  require Logger
 
   @default_renew_interval 30_000
   # The amount of time that must have elapsed since the least_count was incremented in order to
@@ -103,12 +105,10 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
       true ->
         state =
-          case shard_lease.lease_count != state.lease_count do
-            true ->
-              set_lease_count(shard_lease.lease_count, false, state)
-
-            false ->
-              %{state | lease_holder: false}
+          if shard_lease.lease_count != state.lease_count do
+            set_lease_count(shard_lease.lease_count, false, state)
+          else
+            %{state | lease_holder: false}
           end
 
         Logger.debug(
@@ -177,7 +177,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
     end
   end
 
-  defp take_lease(shard_lease, %{app_state_opts: opts, app_name: app_name} = state) do
+  defp take_lease(_shard_lease, %{app_state_opts: opts, app_name: app_name} = state) do
     expected = state.lease_count + 1
 
     Logger.debug(
@@ -198,6 +198,11 @@ defmodule KinesisClient.Stream.Shard.Lease do
         state
 
       :lease_take_failed ->
+        # TODO
+        # :ok = Processor.ensure_halted(state)
+        %{state | lease_holder: false, lease_count_increment_time: current_time()}
+
+      {:error, :lease_take_failed} ->
         # TODO
         # :ok = Processor.ensure_halted(state)
         %{state | lease_holder: false, lease_count_increment_time: current_time()}

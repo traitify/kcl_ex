@@ -1,8 +1,8 @@
 defmodule KinesisClient.Stream.Shard.LeaseTest do
   use KinesisClient.Case
 
-  alias KinesisClient.Stream.Shard.Lease
   alias KinesisClient.Stream.AppState.ShardLease
+  alias KinesisClient.Stream.Shard.Lease
 
   test "creates and takes AppState.ShardLease if none already exists" do
     lease_opts = build_lease_opts()
@@ -58,11 +58,7 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
       lease_opts = build_lease_opts()
       shard_lease = build_shard_lease(lease_count: shard_lease_count)
 
-      AppStateMock
-      |> expect(:get_lease, fn _in_app_name, _in_shard_id, _ ->
-        shard_lease
-      end)
-
+      expect(AppStateMock, :get_lease, fn _in_app_name, _in_shard_id, _ -> shard_lease end)
       {:ok, pid} = start_supervised({Lease, lease_opts})
 
       assert_receive {:initialized, lease_state}, 1_000
@@ -140,11 +136,7 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
     lease_opts = build_lease_opts(lease_expiry: 5_000, renew_interval: 600)
     shard_lease = build_shard_lease(lease_count: shard_lease_count)
 
-    AppStateMock
-    |> expect(:get_lease, 2, fn _in_app_name, _in_shard_id, _ ->
-      shard_lease
-    end)
-
+    expect(AppStateMock, :get_lease, 2, fn _in_app_name, _in_shard_id, _ -> shard_lease end)
     {:ok, pid} = start_supervised({Lease, lease_opts})
 
     assert_receive {:initialized, %{lease_count_increment_time: lcit} = lease_state}, 1_000
@@ -161,15 +153,17 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
   end
 
   defp build_lease_opts(overrides \\ []) do
-    [
-      coordinator_name: MyStreamCoordinator,
-      shard_id: "shard-000001",
-      lease_owner: worker_ref(),
-      app_name: "my_streaming_app",
-      notify: self(),
-      app_state_opts: [adapter: AppStateMock]
-    ]
-    |> Keyword.merge(overrides)
+    Keyword.merge(
+      [
+        coordinator_name: MyStreamCoordinator,
+        shard_id: "shard-000001",
+        lease_owner: worker_ref(),
+        app_name: "my_streaming_app",
+        notify: self(),
+        app_state_opts: [adapter: AppStateMock]
+      ],
+      overrides
+    )
   end
 
   def build_shard_lease(overrides \\ []) do
