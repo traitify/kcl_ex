@@ -125,8 +125,8 @@ defmodule KinesisClient.Stream.Coordinator do
 
         state = %{state | shard_map: shard_map}
 
-        IO.inspect(shard_graph, label: "describe_stream: shard_graph")
-        IO.inspect(state, label: "describe_stream: state")
+        Logger.debug("(describe_stream).shard_graph: #{inspect(shard_graph)}")
+        Logger.debug("(describe_stream).state: #{inspect(state)}")
 
         map = start_shards(shard_graph, state)
 
@@ -175,16 +175,18 @@ defmodule KinesisClient.Stream.Coordinator do
     shard_r =
       shard_graph
       |> list_relationships()
-      |> IO.inspect(label: "start_shards: list_relationships(shard_graph)")
+
+    Logger.debug("(start_shards).shard_r: #{inspect(shard_r)}")
 
     Enum.reduce(shard_r, state.shard_ref_map, fn {shard_id, parents}, acc ->
+      Logger.debug("(start_shards).shard_id: #{inspect(shard_id)}")
+      Logger.debug("(start_shards).parents: #{inspect(parents)}")
+
       shard_lease =
         shard_id
         |> get_lease(state)
-        |> IO.inspect(label: "start_shards: get_lease(shard_id, state)")
 
-      IO.inspect(shard_id, label: "start_shards: shard_id")
-      IO.inspect(parents, label: "start_shards: parents")
+      Logger.debug("(start_shards).shard_lease: #{inspect(shard_lease)}")
 
       case parents do
         [] ->
@@ -200,12 +202,8 @@ defmodule KinesisClient.Stream.Coordinator do
 
         # handle shard splits
         [single_parent] ->
-          # ef - this is returning :not_found
-          case single_parent |> get_lease(state) |> IO.inspect(label: "single_parent") do
+          case single_parent |> get_lease(state) do
             %{completed: true} ->
-              # ef - does this need to handle completed and :not_found? should we start the child if the parent is not found? or start the parent and the child?
-              # ef - I think we start the parent and not the child? the child will be started when the parent is completed
-              # ef - why isn't the parent started already?
               Logger.info("Parent shard #{single_parent} is completed so starting #{shard_id}")
 
               case start_shard(shard_id, state) do

@@ -234,9 +234,8 @@ defmodule KinesisClient.Stream.Shard.Producer do
       {:ok, %{"ShardIterator" => iterator}} ->
         get_records(%{state | shard_iterator: iterator})
 
-      # should I also check to see if the stream is in an active state?
       {:error, {"ResourceNotFoundException", error_message}} ->
-        IO.inspect(state, label: error_message)
+        Logger.info("(get_records).ResourceNotFoundException.#{error_message}: #{inspect(state)})")
         {:noreply, [], %{status: :closed}}
     end
   end

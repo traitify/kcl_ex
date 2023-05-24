@@ -5,40 +5,40 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
   alias KinesisClient.Stream.Shard.Lease
 
   test "creates and takes AppState.ShardLease if none already exists" do
-    lease_opts = build_lease_opts()
+    lease_opts = build_lease_opts() |> IO.inspect(label: "lease_opts")
 
     AppStateMock
-    |> expect(:get_lease, fn in_app_name, in_shard_id, _ ->
-      assert in_app_name == lease_opts[:app_name]
-      assert in_shard_id == lease_opts[:shard_id]
+    |> expect(:get_lease, 10, fn in_app_name, in_shard_id, _ ->
+      assert in_app_name == lease_opts[:app_name] |> IO.inspect(label: "app_name")
+      assert in_shard_id == lease_opts[:shard_id] |> IO.inspect(label: "shard_id")
       :not_found
     end)
-    |> expect(:create_lease, fn app_name, shard_id, lease_owner, _opts ->
-      assert app_name == lease_opts[:app_name]
-      assert shard_id == lease_opts[:shard_id]
-      assert lease_owner == lease_opts[:lease_owner]
+    |> expect(:create_lease, 10, fn app_name, shard_id, lease_owner, _opts ->
+      assert app_name == lease_opts[:app_name] |> IO.inspect(label: "app_name")
+      assert shard_id == lease_opts[:shard_id] |> IO.inspect(label: "shard_id")
+      assert lease_owner == lease_opts[:lease_owner] |> IO.inspect(label: "lease_owner")
 
       :ok
     end)
 
-    {:ok, pid} = start_supervised({Lease, lease_opts})
+    {:ok, pid} = start_supervised({Lease, lease_opts}) |> IO.inspect()
 
-    assert_receive {:initialized, lease_state}, 1_000
+    assert_received {:initialized, lease_state}, 1_000
 
     assert lease_state.lease_holder == true
     assert lease_state.lease_count == 1
 
-    assert Process.alive?(pid)
+    assert Process.alive?(pid) |> IO.inspect()
   end
 
   test "when another Shard created the ShardLease first then set lease_holder: false" do
     lease_opts = build_lease_opts()
 
     AppStateMock
-    |> expect(:get_lease, fn _in_app_name, _in_shard_id, _ ->
+    |> expect(:get_lease, 2, fn _in_app_name, _in_shard_id, _ ->
       :not_found
     end)
-    |> expect(:create_lease, fn _app_name, _shard_id, _lease_owner, _opts ->
+    |> expect(:create_lease, 2, fn _app_name, _shard_id, _lease_owner, _opts ->
       :already_exists
     end)
 
@@ -58,7 +58,7 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
       lease_opts = build_lease_opts()
       shard_lease = build_shard_lease(lease_count: shard_lease_count)
 
-      expect(AppStateMock, :get_lease, fn _in_app_name, _in_shard_id, _ -> shard_lease end)
+      expect(AppStateMock, 2, :get_lease, fn _in_app_name, _in_shard_id, _ -> shard_lease end)
       {:ok, pid} = start_supervised({Lease, lease_opts})
 
       assert_receive {:initialized, lease_state}, 1_000
@@ -77,10 +77,10 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
         build_shard_lease(lease_count: shard_lease_count, lease_owner: lease_opts[:lease_owner])
 
       AppStateMock
-      |> expect(:get_lease, fn _in_app_name, _in_shard_id, _ ->
+      |> expect(:get_lease, 2, fn _in_app_name, _in_shard_id, _ ->
         shard_lease
       end)
-      |> expect(:renew_lease, fn app_name, %{lease_count: lc} = sl, _ ->
+      |> expect(:renew_lease, 2, fn app_name, %{lease_count: lc} = sl, _ ->
         assert app_name == lease_opts[:app_name]
         assert sl.shard_id == shard_lease.shard_id
         assert sl.lease_count == shard_lease.lease_count
@@ -90,7 +90,7 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
 
       {:ok, pid} = start_supervised({Lease, lease_opts})
 
-      assert_receive {:initialized, lease_state}, 1_000
+      assert_receive {:lease_renewed, lease_state}, 1_000
 
       assert lease_state.lease_holder == true
       assert lease_state.lease_count == shard_lease_count + 1
@@ -108,7 +108,7 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
     |> expect(:get_lease, 2, fn _in_app_name, _in_shard_id, _ ->
       shard_lease
     end)
-    |> expect(:take_lease, fn app_name, shard_id, new_owner, lc, _opts ->
+    |> expect(:take_lease, 2, fn app_name, shard_id, new_owner, lc, _opts ->
       assert app_name == lease_opts[:app_name]
       assert shard_id == lease_opts[:shard_id]
       assert new_owner == lease_opts[:lease_owner]
