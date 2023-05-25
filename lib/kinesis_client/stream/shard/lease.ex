@@ -27,7 +27,8 @@ defmodule KinesisClient.Stream.Shard.Lease do
     :renew_interval,
     :notify,
     :lease_expiry,
-    :lease_holder
+    :lease_holder,
+    :pipeline
   ]
 
   @type t :: %__MODULE__{}
@@ -42,7 +43,8 @@ defmodule KinesisClient.Stream.Shard.Lease do
       renew_interval: Keyword.get(opts, :renew_interval, @default_renew_interval),
       lease_expiry: Keyword.get(opts, :lease_expiry, @default_lease_expiry),
       lease_count_increment_time: current_time(),
-      notify: Keyword.get(opts, :notify)
+      notify: Keyword.get(opts, :notify),
+      pipeline: Keyword.get(opts, :pipeline, Pipeline)
     }
 
     Process.send_after(self(), :take_or_renew_lease, state.renew_interval)
@@ -69,7 +71,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
       end
 
     if new_state.lease_holder do
-      :ok = Pipeline.start(state.app_name, state.shard_id)
+      :ok = state.pipeline.start(state.app_name, state.shard_id)
     end
 
     notify({:initialized, new_state}, state)

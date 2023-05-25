@@ -5,40 +5,41 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
   alias KinesisClient.Stream.Shard.Lease
 
   test "creates and takes AppState.ShardLease if none already exists" do
-    lease_opts = build_lease_opts() |> IO.inspect(label: "lease_opts")
+    lease_opts = build_lease_opts(pipeline: KinesisClient.TestPipeline)
 
     AppStateMock
-    |> expect(:get_lease, 10, fn in_app_name, in_shard_id, _ ->
-      assert in_app_name == lease_opts[:app_name] |> IO.inspect(label: "app_name")
-      assert in_shard_id == lease_opts[:shard_id] |> IO.inspect(label: "shard_id")
+    |> stub(:get_lease, fn in_app_name, in_shard_id, _ ->
+      assert in_app_name == lease_opts[:app_name]
+      assert in_shard_id == lease_opts[:shard_id]
       :not_found
     end)
-    |> expect(:create_lease, 10, fn app_name, shard_id, lease_owner, _opts ->
-      assert app_name == lease_opts[:app_name] |> IO.inspect(label: "app_name")
-      assert shard_id == lease_opts[:shard_id] |> IO.inspect(label: "shard_id")
-      assert lease_owner == lease_opts[:lease_owner] |> IO.inspect(label: "lease_owner")
+    |> stub(:create_lease, fn app_name, shard_id, lease_owner, _opts ->
+      assert app_name == lease_opts[:app_name]
+      assert shard_id == lease_opts[:shard_id]
+      assert lease_owner == lease_opts[:lease_owner]
 
       :ok
     end)
 
-    {:ok, pid} = start_supervised({Lease, lease_opts}) |> IO.inspect()
+    {:ok, pid} = start_supervised({Lease, lease_opts})
 
-    assert_received {:initialized, lease_state}, 1_000
+    assert_receive {:initialized, lease_state}, 1_000
 
+    inspect(lease_state, label: "lease_state")
     assert lease_state.lease_holder == true
     assert lease_state.lease_count == 1
 
-    assert Process.alive?(pid) |> IO.inspect()
+    assert Process.alive?(pid)
   end
 
   test "when another Shard created the ShardLease first then set lease_holder: false" do
     lease_opts = build_lease_opts()
 
     AppStateMock
-    |> expect(:get_lease, 2, fn _in_app_name, _in_shard_id, _ ->
+    |> stub(:get_lease, fn _in_app_name, _in_shard_id, _ ->
       :not_found
     end)
-    |> expect(:create_lease, 2, fn _app_name, _shard_id, _lease_owner, _opts ->
+    |> expect(:create_lease, fn _app_name, _shard_id, _lease_owner, _opts ->
       :already_exists
     end)
 
@@ -58,7 +59,7 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
       lease_opts = build_lease_opts()
       shard_lease = build_shard_lease(lease_count: shard_lease_count)
 
-      expect(AppStateMock, 2, :get_lease, fn _in_app_name, _in_shard_id, _ -> shard_lease end)
+      stub(AppStateMock, :get_lease, fn _in_app_name, _in_shard_id, _ -> shard_lease end)
       {:ok, pid} = start_supervised({Lease, lease_opts})
 
       assert_receive {:initialized, lease_state}, 1_000
@@ -77,10 +78,10 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
         build_shard_lease(lease_count: shard_lease_count, lease_owner: lease_opts[:lease_owner])
 
       AppStateMock
-      |> expect(:get_lease, 2, fn _in_app_name, _in_shard_id, _ ->
+      |> stub(:get_lease, fn _in_app_name, _in_shard_id, _ ->
         shard_lease
       end)
-      |> expect(:renew_lease, 2, fn app_name, %{lease_count: lc} = sl, _ ->
+      |> expect(:renew_lease, fn app_name, %{lease_count: lc} = sl, _ ->
         assert app_name == lease_opts[:app_name]
         assert sl.shard_id == shard_lease.shard_id
         assert sl.lease_count == shard_lease.lease_count
@@ -105,10 +106,10 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
     shard_lease = build_shard_lease(lease_count: shard_lease_count)
 
     AppStateMock
-    |> expect(:get_lease, 2, fn _in_app_name, _in_shard_id, _ ->
+    |> stub(:get_lease, fn _in_app_name, _in_shard_id, _ ->
       shard_lease
     end)
-    |> expect(:take_lease, 2, fn app_name, shard_id, new_owner, lc, _opts ->
+    |> expect(:take_lease, fn app_name, shard_id, new_owner, lc, _opts ->
       assert app_name == lease_opts[:app_name]
       assert shard_id == lease_opts[:shard_id]
       assert new_owner == lease_opts[:lease_owner]
@@ -116,7 +117,7 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
       {:ok, lc + 1}
     end)
 
-    {:ok, pid} = start_supervised({Lease, lease_opts})
+    {:ok, _pid} = start_supervised({Lease, lease_opts})
 
     assert_receive {:initialized, %{lease_count_increment_time: lcit} = lease_state}, 1_000
     assert lease_state.lease_holder == false
@@ -125,7 +126,7 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
     assert_receive {:tracking_lease, _}, 5_000
     assert_receive {:lease_taken, lease_state}, 15_000
 
-    stop_supervised(pid)
+    stop_supervised(Lease)
     assert lease_state.lease_holder == true
     assert lease_state.lease_count == shard_lease.lease_count + 1
     assert lcit < lease_state.lease_count_increment_time
@@ -136,10 +137,10 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
     lease_opts = build_lease_opts(lease_expiry: 5_000, renew_interval: 600)
     shard_lease = build_shard_lease(lease_count: shard_lease_count)
 
-    expect(AppStateMock, :get_lease, 2, fn _in_app_name, _in_shard_id, _ -> shard_lease end)
-    {:ok, pid} = start_supervised({Lease, lease_opts})
+    stub(AppStateMock, :get_lease, fn _in_app_name, _in_shard_id, _ -> shard_lease end)
+    {:ok, _pid} = start_supervised({Lease, lease_opts})
 
-    assert_receive {:initialized, %{lease_count_increment_time: lcit} = lease_state}, 1_000
+    assert_receive {:initialized, %{lease_count_increment_time: _lcit} = lease_state}, 1_000
     assert lease_state.lease_holder == false
 
     assert_receive {:tracking_lease, lease_state}, 5_000
@@ -147,7 +148,7 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
     assert lease_state.lease_count == shard_lease.lease_count
 
     assert_receive {:tracking_lease, lease_state}, 5_000
-    stop_supervised(pid)
+    stop_supervised(Lease)
     assert lease_state.lease_holder == false
     assert lease_state.lease_count == shard_lease.lease_count
   end

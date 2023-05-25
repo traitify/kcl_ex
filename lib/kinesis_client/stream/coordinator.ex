@@ -133,7 +133,7 @@ defmodule KinesisClient.Stream.Coordinator do
         {:noreply, %{state | shard_graph: shard_graph, shard_ref_map: map}}
 
       other ->
-        Logger.info("Stream is not in active state, sleeping... Stream state: #{inspect(other)}")
+        Logger.debug("Stream is not in active state, sleeping... Stream state: #{inspect(other)}")
 
         :timer.sleep(state.retry_timeout)
         notify({:retrying_describe_stream, self()}, state)
@@ -172,9 +172,7 @@ defmodule KinesisClient.Stream.Coordinator do
   end
 
   defp start_shards(shard_graph, %__MODULE__{} = state) do
-    shard_r =
-      shard_graph
-      |> list_relationships()
+    shard_r = list_relationships(shard_graph)
 
     Logger.debug("(start_shards).shard_r: #{inspect(shard_r)}")
 
@@ -182,9 +180,7 @@ defmodule KinesisClient.Stream.Coordinator do
       Logger.debug("(start_shards).shard_id: #{inspect(shard_id)}")
       Logger.debug("(start_shards).parents: #{inspect(parents)}")
 
-      shard_lease =
-        shard_id
-        |> get_lease(state)
+      shard_lease = get_lease(shard_id, state)
 
       Logger.debug("(start_shards).shard_lease: #{inspect(shard_lease)}")
 
@@ -202,7 +198,7 @@ defmodule KinesisClient.Stream.Coordinator do
 
         # handle shard splits
         [single_parent] ->
-          case single_parent |> get_lease(state) do
+          case get_lease(single_parent, state) do
             %{completed: true} ->
               Logger.info("Parent shard #{single_parent} is completed so starting #{shard_id}")
 
