@@ -19,7 +19,8 @@ defmodule KinesisClient.Stream.AppState.Postgres.ShardLeases do
     |> get_shard_lease(repo)
   end
 
-  @spec insert_shard_lease(map, Ecto.Repo.t()) :: {:error, Ecto.Changeset.t()} | {:ok, ShardLease.t()}
+  @spec insert_shard_lease(map, Ecto.Repo.t()) ::
+          {:error, Ecto.Changeset.t()} | {:ok, ShardLease.t()}
   def insert_shard_lease(attrs, repo) do
     %ShardLease{}
     |> ShardLease.changeset(attrs)

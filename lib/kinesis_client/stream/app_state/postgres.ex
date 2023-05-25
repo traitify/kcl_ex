@@ -76,7 +76,7 @@ defmodule KinesisClient.Stream.AppState.Postgres do
            ) do
       {:ok, updated_count}
     else
-      {:error, _} -> {:ok, :lease_take_failed}
+      {:error, _} -> {:error, :lease_take_failed}
     end
   end
 
