@@ -1,4 +1,4 @@
-defmodule KinesisClient.Stream.AppState.Postgres.ShardLease do
+defmodule KinesisClient.Stream.AppState.Ecto.ShardLease do
   use Ecto.Schema
 
   import Ecto.Changeset

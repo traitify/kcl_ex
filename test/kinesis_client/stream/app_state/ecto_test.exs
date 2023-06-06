@@ -1,15 +1,15 @@
-defmodule KinesisClient.Stream.AppState.PostgresTest do
+defmodule KinesisClient.Stream.AppState.EctoTest do
   use ExUnit.Case
 
-  alias KinesisClient.PostgresRepo
-  alias KinesisClient.Stream.AppState.Postgres
+  alias KinesisClient.Ecto.Repo
+  alias KinesisClient.Stream.AppState.Ecto
 
   test "creates a shard_lease" do
-    assert Postgres.create_lease("", "a.b.c", "test_owner", repo: PostgresRepo) == :ok
+    assert Ecto.create_lease("", "a.b.c", "test_owner", repo: Repo) == :ok
   end
 
   test "gets a shard_lease" do
-    shard_lease = Postgres.get_lease("", "a.b.c", repo: PostgresRepo)
+    shard_lease = Ecto.get_lease("", "a.b.c", repo: Repo)
 
     assert shard_lease.shard_id == "a.b.c"
     assert shard_lease.checkpoint == nil
@@ -25,29 +25,29 @@ defmodule KinesisClient.Stream.AppState.PostgresTest do
       lease_count: 1
     }
 
-    {:ok, lease_count} = Postgres.renew_lease("", change, repo: PostgresRepo)
+    {:ok, lease_count} = Ecto.renew_lease("", change, repo: Repo)
 
     assert lease_count == 2
   end
 
   test "takes a shard_lease" do
-    {:ok, lease_count} = Postgres.take_lease("", "a.b.c", "new_owner", 1, repo: PostgresRepo)
+    {:ok, lease_count} = Ecto.take_lease("", "a.b.c", "new_owner", 1, repo: Repo)
 
     assert lease_count == 2
   end
 
   test "returns error when taking a shard_lease" do
-    {:error, error} = Postgres.take_lease("", "a.b.c", "test_owner", 1, repo: PostgresRepo)
+    {:error, error} = Ecto.take_lease("", "a.b.c", "test_owner", 1, repo: Repo)
 
     assert error == :lease_take_failed
   end
 
   test "updates shard_lease checkpoint" do
-    assert Postgres.update_checkpoint("", "a.b.c", "test_owner", "checkpoint_1", repo: PostgresRepo) ==
+    assert Ecto.update_checkpoint("", "a.b.c", "test_owner", "checkpoint_1", repo: Repo) ==
              :ok
   end
 
   test "closes shard" do
-    assert Postgres.close_shard("", "a.b.c", "test_owner", repo: PostgresRepo) == :ok
+    assert Ecto.close_shard("", "a.b.c", "test_owner", repo: Repo) == :ok
   end
 end

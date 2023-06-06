@@ -1,5 +1,5 @@
-defmodule KinesisClient.Stream.AppState.Postgres.ShardLeases do
-  alias KinesisClient.Stream.AppState.Postgres.ShardLease
+defmodule KinesisClient.Stream.AppState.Ecto.ShardLeases do
+  alias KinesisClient.Stream.AppState.Ecto.ShardLease
 
   @spec get_shard_lease(map, Ecto.Repo.t()) :: {:error, :not_found} | {:ok, ShardLease.t()}
   def get_shard_lease(params, repo) do

@@ -1,15 +1,15 @@
-defmodule KinesisClient.Stream.AppState.Postgres.ShardLeasesTest do
+defmodule KinesisClient.Stream.AppState.Ecto.ShardLeasesTest do
   use ExUnit.Case
 
-  alias KinesisClient.PostgresRepo
-  alias KinesisClient.Stream.AppState.Postgres.ShardLeases
+  alias KinesisClient.Ecto.Repo
+  alias KinesisClient.Stream.AppState.Ecto.ShardLeases
 
   test "get_shard_lease/2" do
     params = %{
       shard_id: "a.b.c"
     }
 
-    {:ok, shard_lease} = ShardLeases.get_shard_lease(params, PostgresRepo)
+    {:ok, shard_lease} = ShardLeases.get_shard_lease(params, Repo)
 
     assert shard_lease.shard_id == "a.b.c"
     assert shard_lease.checkpoint == nil
@@ -19,7 +19,7 @@ defmodule KinesisClient.Stream.AppState.Postgres.ShardLeasesTest do
   end
 
   test "get_shard_lease_by_id/2" do
-    {:ok, shard_lease} = ShardLeases.get_shard_lease_by_id("a.b.c", PostgresRepo)
+    {:ok, shard_lease} = ShardLeases.get_shard_lease_by_id("a.b.c", Repo)
 
     assert shard_lease.shard_id == "a.b.c"
     assert shard_lease.checkpoint == nil
@@ -37,7 +37,7 @@ defmodule KinesisClient.Stream.AppState.Postgres.ShardLeasesTest do
         lease_owner: "test_owner"
       }
 
-      {:ok, shard_lease} = ShardLeases.insert_shard_lease(attrs, PostgresRepo)
+      {:ok, shard_lease} = ShardLeases.insert_shard_lease(attrs, Repo)
 
       assert shard_lease.shard_id == "a.b.c"
       assert shard_lease.checkpoint == nil
@@ -54,7 +54,7 @@ defmodule KinesisClient.Stream.AppState.Postgres.ShardLeasesTest do
         lease_owner: "test_owner"
       }
 
-      {:error, changeset} = ShardLeases.insert_shard_lease(attrs, PostgresRepo)
+      {:error, changeset} = ShardLeases.insert_shard_lease(attrs, Repo)
 
       expected_error = {"is invalid", [type: :integer, validation: :cast]}
       assert %Ecto.Changeset{errors: [lease_count: ^expected_error]} = changeset
@@ -62,12 +62,11 @@ defmodule KinesisClient.Stream.AppState.Postgres.ShardLeasesTest do
   end
 
   test "update_shard_lease/3" do
-    {:ok, shard_lease} = ShardLeases.get_shard_lease_by_id("a.b.c", PostgresRepo)
+    {:ok, shard_lease} = ShardLeases.get_shard_lease_by_id("a.b.c", Repo)
 
     assert shard_lease.completed == false
 
-    {:ok, updated_shard_lease} =
-      ShardLeases.update_shard_lease(shard_lease, PostgresRepo, completed: true)
+    {:ok, updated_shard_lease} = ShardLeases.update_shard_lease(shard_lease, Repo, completed: true)
 
     assert updated_shard_lease.completed == true
   end

@@ -1,6 +1,6 @@
-defmodule KinesisClient.PostgresRepo do
+defmodule KinesisClient.Ecto.Repo do
   alias Ecto.Changeset
-  alias KinesisClient.Stream.AppState.Postgres.ShardLease
+  alias KinesisClient.Stream.AppState.Ecto.ShardLease
 
   def one(_query, _opts \\ []) do
     %ShardLease{
