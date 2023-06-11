@@ -2,14 +2,14 @@ defmodule KinesisClient.Stream.AppState.Ecto do
   @moduledoc false
 
   alias KinesisClient.Stream.AppState.Adapter, as: AppStateAdapter
-  alias KinesisClient.Stream.AppState.Ecto.Postgres.Migration, as: Postgres
+  alias KinesisClient.Stream.AppState.Ecto.Migration
   alias KinesisClient.Stream.AppState.Ecto.ShardLeases
 
   @behaviour AppStateAdapter
 
   @impl AppStateAdapter
-  def initialize(_app_name, repo: repo, adapter: :postgres) do
-    case Ecto.Migrator.up(repo, version(), Postgres) do
+  def initialize(_app_name, repo: repo) do
+    case Ecto.Migrator.up(repo, version(), Migration) do
       :ok -> :ok
       :already_up -> :ok
     end

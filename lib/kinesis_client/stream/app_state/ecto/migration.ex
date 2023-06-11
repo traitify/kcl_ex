@@ -1,4 +1,4 @@
-defmodule KinesisClient.Stream.AppState.Ecto.Postgres.Migration do
+defmodule KinesisClient.Stream.AppState.Ecto.Migration do
   use Ecto.Migration
 
   def up do
