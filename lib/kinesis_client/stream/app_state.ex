@@ -47,6 +47,8 @@ defmodule KinesisClient.Stream.AppState do
     do: adapter(opts).close_shard(app_name, shard_id, opts)
 
   defp adapter(opts) do
+    IO.inspect "called adapter"
+    IO.inspect opts
     Keyword.get(opts, :adapter, KinesisClient.Stream.AppState.Dynamo)
   end
 end
