@@ -9,9 +9,9 @@ defmodule KinesisClient.Stream.AppState.Ecto do
 
   @impl AppStateAdapter
   # def initialize(_app_name, [repo: repo, adapter: _]) do
-  def initialize(app_name, opts) do
+  def initialize(app_name, [repo: repo, adapter: _]) do
     IO.puts "madeitinit"
-    case Ecto.Migrator.up("ssdsds", version(), Migration) do
+    case Ecto.Migrator.up(repo, version(), Migration) do
       :ok -> :ok
       :already_up -> :ok
     end
