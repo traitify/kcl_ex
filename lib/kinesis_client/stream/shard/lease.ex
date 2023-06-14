@@ -68,6 +68,9 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
         %ShardLease{} = s ->
           take_or_renew_lease(s, state)
+        other ->
+          IO.puts "shard lease other"
+          IO.inspect other
       end
 
     if new_state.lease_holder do
