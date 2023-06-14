@@ -8,7 +8,8 @@ defmodule KinesisClient.Stream.AppState.Ecto do
   @behaviour AppStateAdapter
 
   @impl AppStateAdapter
-  def initialize(_app_name, repo: repo) do
+  def initialize(_app_name, [repo: repo, adapter: _]) do
+    IO.puts "madeitinit"
     case Ecto.Migrator.up(repo, version(), Migration) do
       :ok -> :ok
       :already_up -> :ok
