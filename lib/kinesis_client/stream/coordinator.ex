@@ -68,6 +68,8 @@ defmodule KinesisClient.Stream.Coordinator do
 
   @impl GenServer
   def handle_continue(:initialize, state) do
+    IO.inspect "create_table_if_not_exists called"
+    IO.inspect state
     create_table_if_not_exists(state)
     describe_stream(state)
   end
