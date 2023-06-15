@@ -35,7 +35,6 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
   @impl GenServer
   def init(opts) do
-    IO.puts "called init lease"
     state = %__MODULE__{
       app_name: opts[:app_name],
       shard_id: opts[:shard_id],
@@ -68,7 +67,6 @@ defmodule KinesisClient.Stream.Shard.Lease do
           create_lease(state)
 
         shard_lease ->
-          IO.puts "hit take or renew"
           take_or_renew_lease(shard_lease, state)
       end
 
@@ -140,12 +138,10 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
   @spec create_lease(state :: t()) :: t()
   defp create_lease(%{app_state_opts: opts, app_name: app_name, lease_owner: lease_owner} = state) do
-    IO.puts "create lease called"
     Logger.debug(
       "Creating lease: [app_name: #{app_name}, shard_id: #{state.shard_id}, lease_owner: " <>
         "#{lease_owner}]"
     )
-    IO.inspect AppState.create_lease(app_name, state.shard_id, lease_owner, opts)
     case AppState.create_lease(app_name, state.shard_id, lease_owner, opts) do
       :ok -> %{state | lease_holder: true, lease_count: 1}
       :already_exists -> %{state | lease_holder: false}

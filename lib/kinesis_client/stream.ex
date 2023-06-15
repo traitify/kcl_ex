@@ -64,7 +64,7 @@ defmodule KinesisClient.Stream do
       worker_ref: worker_ref,
       shard_args: shard_args
     ]
-    IO.puts "called coordinator args"
+    IO.puts "coordinator args"
     IO.inspect coordinator_args
 
     children = [

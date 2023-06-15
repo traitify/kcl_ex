@@ -68,8 +68,6 @@ defmodule KinesisClient.Stream.Coordinator do
 
   @impl GenServer
   def handle_continue(:initialize, state) do
-    IO.inspect "create_table_if_not_exists called"
-    IO.inspect state
     create_table_if_not_exists(state)
     describe_stream(state)
   end
@@ -109,15 +107,12 @@ defmodule KinesisClient.Stream.Coordinator do
   end
 
   defp describe_stream(state) do
-    IO.puts "called describe_stream"
     %{"StreamStatus" => status, "Shards" => shards} =
       get_shards(state.stream_name, state.kinesis_opts)
 
     shards = remove_missing_parents(shards)
 
     notify({:shards, shards}, state)
-
-    IO.inspect status
 
     case status do
       "ACTIVE" ->

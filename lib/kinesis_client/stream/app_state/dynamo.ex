@@ -10,7 +10,6 @@ defmodule KinesisClient.Stream.AppState.Dynamo do
 
   @impl AppStateAdapter
   def initialize(app_name, _opts) do
-    IO.puts "called create table"
     case confirm_table_created(app_name) do
       :ok -> :ok
       {:error, {"ResourceNotFoundException", _}} -> create_table(app_name)
