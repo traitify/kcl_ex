@@ -68,9 +68,6 @@ defmodule KinesisClient.Stream.AppState.Dynamo do
 
   @impl AppStateAdapter
   def get_lease(app_name, shard_id, _opts) do
-    Logger.debug("(get_lease).app_name: #{app_name}")
-    Logger.debug("(get_lease).shard_id: #{shard_id}")
-
     case app_name
          |> Dynamo.get_item(%{"shard_id" => shard_id})
          |> ExAws.request() do

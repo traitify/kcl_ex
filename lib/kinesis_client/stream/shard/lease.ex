@@ -57,8 +57,6 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
   @impl GenServer
   def handle_continue(:initialize, state) do
-    IO.inspect "get_leaseeee"
-    IO.inspect get_lease(state)
     new_state =
       case get_lease(state) do
         :not_found ->
@@ -69,15 +67,11 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
           create_lease(state)
 
-        %ShardLease{} = s ->
-          IO.puts "shard lease s"
-          take_or_renew_lease(s, state)
-        other ->
-          IO.puts "shard lease other"
-          IO.inspect other
+        shard_lease ->
+          IO.puts "hit take or renew"
+          {:noreply, take_or_renew_lease(shard_lease, state)}
       end
 
-    IO.puts "I think this key error happens here"
     if new_state.lease_holder do
       :ok = state.pipeline.start(state.app_name, state.shard_id)
     end
@@ -93,8 +87,8 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
     reply =
       case get_lease(state) do
-        %ShardLease{} = s ->
-          {:noreply, take_or_renew_lease(s, state)}
+        shard_lease ->
+          {:noreply, take_or_renew_lease(shard_lease, state)}
 
         {:error, e} ->
           Logger.error("Error fetching shard #{state.share_id}: #{inspect(e)}")
