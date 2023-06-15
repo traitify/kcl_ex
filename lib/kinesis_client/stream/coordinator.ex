@@ -109,12 +109,15 @@ defmodule KinesisClient.Stream.Coordinator do
   end
 
   defp describe_stream(state) do
+    IO.puts "called describe_stream"
     %{"StreamStatus" => status, "Shards" => shards} =
       get_shards(state.stream_name, state.kinesis_opts)
 
     shards = remove_missing_parents(shards)
 
     notify({:shards, shards}, state)
+
+    IO.inspect status
 
     case status do
       "ACTIVE" ->

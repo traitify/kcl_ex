@@ -35,6 +35,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
   @impl GenServer
   def init(opts) do
+    IO.puts "called init lease"
     state = %__MODULE__{
       app_name: opts[:app_name],
       shard_id: opts[:shard_id],

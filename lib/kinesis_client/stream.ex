@@ -58,7 +58,6 @@ defmodule KinesisClient.Stream do
     coordinator_args = [
       name: coordinator_name,
       stream_name: stream_name,
-      # adapter: Keyword.get(opts, :adapter, KinesisClient.Stream.AppState.Dynamo),
       app_name: app_name,
       app_state_opts: Keyword.get(opts, :app_state_opts, []),
       shard_supervisor_name: shard_supervisor_name,
