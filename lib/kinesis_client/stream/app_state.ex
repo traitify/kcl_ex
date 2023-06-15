@@ -49,8 +49,8 @@ defmodule KinesisClient.Stream.AppState do
   defp adapter(opts) do
     IO.inspect "called adapter"
     IO.inspect opts
-    IO.inspect Keyword.get(opts, :adapter, KinesisClient.Stream.AppState.Dynamo)
+    IO.inspect Keyword.get(opts, :adapter, KinesisClient.Stream.AppState.Ecto)
     IO.inspect Process.info(self(), :current_stacktrace)
-    Keyword.get(opts, :adapter, KinesisClient.Stream.AppState.Dynamo)
+    Keyword.get(opts, :adapter, KinesisClient.Stream.AppState.Ecto)
   end
 end
