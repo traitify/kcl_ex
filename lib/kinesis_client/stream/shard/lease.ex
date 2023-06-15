@@ -69,7 +69,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
         shard_lease ->
           IO.puts "hit take or renew"
-          {:noreply, take_or_renew_lease(shard_lease, state)}
+          take_or_renew_lease(shard_lease, state)
       end
 
     if new_state.lease_holder do
