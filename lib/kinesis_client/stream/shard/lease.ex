@@ -58,7 +58,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
   def handle_continue(:initialize, state) do
     new_state =
       IO.inspect "get_leaseeee"
-      Io.inspect get_lease(state)
+      IO.inspect get_lease(state)
       case get_lease(state) do
         :not_found ->
           Logger.debug(
