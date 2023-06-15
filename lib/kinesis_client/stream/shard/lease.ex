@@ -151,7 +151,6 @@ defmodule KinesisClient.Stream.Shard.Lease do
     )
     IO.inspect AppState.create_lease(app_name, state.shard_id, lease_owner, opts)
     case AppState.create_lease(app_name, state.shard_id, lease_owner, opts) do
-      IO.puts "create lease case"
       :ok -> %{state | lease_holder: true, lease_count: 1}
       :already_exists -> %{state | lease_holder: false}
     end
