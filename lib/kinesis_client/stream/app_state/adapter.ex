@@ -1,7 +1,8 @@
 defmodule KinesisClient.Stream.AppState.Adapter do
   @moduledoc false
 
-  alias KinesisClient.Stream.AppState.ShardLease
+  alias KinesisClient.Stream.AppState.Ecto.ShardLease, as: EctoShardLease
+  alias KinesisClient.Stream.AppState.ShardLease, as: DynamoShardLease
 
   @doc """
   Implement to setup any backend storage. Should not clear data as this will be called everytime a
@@ -10,7 +11,7 @@ defmodule KinesisClient.Stream.AppState.Adapter do
   @callback initialize(app_name :: String.t(), opts :: keyword) :: :ok | {:error, any}
 
   @callback get_lease(app_name :: String.t(), shard_id :: String.t(), opts :: keyword) ::
-              ShardLease.t() | :not_found | {:error, any}
+              DynamoShardLease.t() | EctoShardLease.t() | :not_found | {:error, any}
 
   @callback create_lease(
               app_name :: String.t(),
@@ -29,7 +30,7 @@ defmodule KinesisClient.Stream.AppState.Adapter do
             ) ::
               :ok | {:error, any}
 
-  @callback renew_lease(app_name :: String.t(), shard_lease :: ShardLease.t(), opts :: keyword) ::
+  @callback renew_lease(app_name :: String.t(), shard_lease :: DynamoShardLease.t() | EctoShardLease.t(), opts :: keyword) ::
               {:ok, new_lease_count :: integer} | :lease_renew_failed | {:error, any}
 
   @callback take_lease(
