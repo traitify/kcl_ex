@@ -47,6 +47,9 @@ defmodule KinesisClient.Stream.AppState do
     do: adapter(opts).close_shard(app_name, shard_id, opts)
 
   defp adapter(opts) do
-    Keyword.get(opts, :adapter, KinesisClient.Stream.AppState.Dynamo)
+    case Keyword.get(opts, :adapter) do
+      :ecto -> KinesisClient.Stream.AppState.Ecto
+      _ -> KinesisClient.Stream.AppState.Dynamo
+    end
   end
 end
