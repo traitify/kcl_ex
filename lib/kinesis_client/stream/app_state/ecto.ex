@@ -8,7 +8,7 @@ defmodule KinesisClient.Stream.AppState.Ecto do
 
   @impl true
   # def initialize(_app_name, [repo: repo, adapter: _]) do
-  def initialize(_app_name, [repo: repo] = opts) do
+  def initialize(_app_name, [adapter: _adapter, repo: repo] = opts) do
     # repo = Keyword.get(opts, :repo)
     IO.inspect(opts, label: "OPTS")
 
