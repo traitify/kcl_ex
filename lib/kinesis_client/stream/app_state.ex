@@ -47,16 +47,15 @@ defmodule KinesisClient.Stream.AppState do
     do: adapter(opts).close_shard(app_name, shard_id, opts)
 
   defp adapter(opts) do
-    IO.inspect "called adapter"
-    IO.inspect opts
-    IO.inspect Keyword.get(opts, :adapter, KinesisClient.Stream.AppState.Dynamo)
-    IO.inspect Process.info(self(), :current_stacktrace)
+    IO.inspect("called adapter")
+    IO.inspect(opts)
+    IO.inspect(Keyword.get(opts, :adapter, KinesisClient.Stream.AppState.Dynamo))
+    IO.inspect(Process.info(self(), :current_stacktrace))
     # Keyword.get(opts, :adapter, KinesisClient.Stream.AppState.Dynamo)
-    defp adapter(opts) do
-      case Keyword.get(opts, :adapter) do
-        :ecto -> KinesisClient.Stream.AppState.Ecto
-        _ -> KinesisClient.Stream.AppState.Dynamo
-      end
+
+    case Keyword.get(opts, :adapter) do
+      :ecto -> KinesisClient.Stream.AppState.Ecto
+      _ -> KinesisClient.Stream.AppState.Dynamo
     end
   end
 end
