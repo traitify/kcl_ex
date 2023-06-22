@@ -1,22 +1,25 @@
 defmodule KinesisClient.Stream.AppState.Ecto do
   @moduledoc false
 
-  alias KinesisClient.Stream.AppState.Adapter, as: AppStateAdapter
+  @behaviour KinesisClient.Stream.AppState.Adapter
+
   alias KinesisClient.Stream.AppState.Ecto.Migration
   alias KinesisClient.Stream.AppState.Ecto.ShardLeases
 
-  @behaviour AppStateAdapter
+  @impl true
+  def initialize(_app_name, opts) do
+    repo = Keyword.get(opts, :repo)
 
-  @impl AppStateAdapter
-  def initialize(_app_name, repo: repo) do
     case Ecto.Migrator.up(repo, version(), Migration) do
       :ok -> :ok
       :already_up -> :ok
     end
   end
 
-  @impl AppStateAdapter
-  def create_lease(_app_name, shard_id, lease_owner, repo: repo) do
+  @impl true
+  def create_lease(_app_name, shard_id, lease_owner, opts) do
+    repo = Keyword.get(opts, :repo)
+
     attrs = %{
       shard_id: shard_id,
       lease_owner: lease_owner,
@@ -34,8 +37,10 @@ defmodule KinesisClient.Stream.AppState.Ecto do
     end
   end
 
-  @impl AppStateAdapter
-  def get_lease(_app_name, shard_id, repo: repo) do
+  @impl true
+  def get_lease(_app_name, shard_id, opts) do
+    repo = Keyword.get(opts, :repo)
+
     with {:ok, shard_lease} <- ShardLeases.get_shard_lease_by_id(shard_id, repo) do
       shard_lease
     else
@@ -43,12 +48,14 @@ defmodule KinesisClient.Stream.AppState.Ecto do
     end
   end
 
-  @impl AppStateAdapter
+  @impl true
   def renew_lease(
         _app_name,
         %{shard_id: shard_id, lease_owner: lease_owner, lease_count: lease_count},
-        repo: repo
+        opts
       ) do
+    repo = Keyword.get(opts, :repo)
+
     updated_count = lease_count + 1
 
     shard_lease_params = %{shard_id: shard_id, lease_owner: lease_owner, lease_count: lease_count}
@@ -61,8 +68,10 @@ defmodule KinesisClient.Stream.AppState.Ecto do
     end
   end
 
-  @impl AppStateAdapter
-  def take_lease(_app_name, shard_id, new_lease_owner, lease_count, repo: repo) do
+  @impl true
+  def take_lease(_app_name, shard_id, new_lease_owner, lease_count, opts) do
+    repo = Keyword.get(opts, :repo)
+
     updated_count = lease_count + 1
 
     shard_lease_params = %{shard_id: shard_id, lease_count: lease_count}
@@ -80,8 +89,10 @@ defmodule KinesisClient.Stream.AppState.Ecto do
     end
   end
 
-  @impl AppStateAdapter
-  def update_checkpoint(_app_name, shard_id, lease_owner, checkpoint, repo: repo) do
+  @impl true
+  def update_checkpoint(_app_name, shard_id, lease_owner, checkpoint, opts) do
+    repo = Keyword.get(opts, :repo)
+
     shard_lease_params = %{shard_id: shard_id, lease_owner: lease_owner}
 
     with {:ok, shard_lease} <- ShardLeases.get_shard_lease(shard_lease_params, repo),
@@ -92,8 +103,10 @@ defmodule KinesisClient.Stream.AppState.Ecto do
     end
   end
 
-  @impl AppStateAdapter
-  def close_shard(_app_name, shard_id, lease_owner, repo: repo) do
+  @impl true
+  def close_shard(_app_name, shard_id, lease_owner, opts) do
+    repo = Keyword.get(opts, :repo)
+
     shard_lease_params = %{shard_id: shard_id, lease_owner: lease_owner}
 
     with {:ok, shard_lease} <- ShardLeases.get_shard_lease(shard_lease_params, repo),
@@ -104,7 +117,7 @@ defmodule KinesisClient.Stream.AppState.Ecto do
     end
   end
 
-  defp version() do
+  defp version do
     DateTime.utc_now()
     |> Calendar.strftime("%Y%m%d%H%M%S")
     |> String.to_integer()
@@ -113,20 +126,16 @@ defmodule KinesisClient.Stream.AppState.Ecto do
   defp already_exists(%{shard_id: ["has already been taken"]}), do: :already_exists
   defp already_exists(error), do: {:error, error}
 
-  defp lease_owner_not_match(%{lease_owner: lease_owner}, new_lease_owner) do
-    case lease_owner == new_lease_owner do
-      true -> {:error, :lease_owner_match}
-      _ -> {:ok, true}
-    end
-  end
+  defp lease_owner_not_match(%{lease_owner: lease_owner}, new_lease_owner)
+       when lease_owner == new_lease_owner,
+       do: {:error, :lease_owner_match}
+
+  defp lease_owner_not_match(%{lease_owner: _lease_owner}, _new_lease_owner), do: {:ok, true}
 
   defp extract_changeset_errors(changeset) do
-    changeset
-    |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
+    Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
       Regex.replace(~r"%{(\w+)}", msg, fn _, key ->
-        opts
-        |> Keyword.get(String.to_existing_atom(key), key)
-        |> to_string()
+        opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
       end)
     end)
   end
