@@ -70,6 +70,15 @@ defmodule KinesisClient.Stream.Shard.Lease do
       end
 
     if new_state.lease_holder do
+      IO.puts("called KinesisClient.Stream.Lease")
+      IO.puts("below is kicking off the pipeline")
+
+      IO.puts(
+        "this is the only thing that is needed to get fixed at this point so if you get new weird errors so be it"
+      )
+
+      IO.puts("at the end of the day we probably only really need adapter state")
+      IO.inspect(state)
       :ok = state.pipeline.start(state.app_name, state.shard_id)
     end
 
