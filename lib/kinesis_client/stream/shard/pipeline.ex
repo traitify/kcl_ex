@@ -9,6 +9,7 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
   def start_link(opts) do
     IO.puts("Pipeline start_link opts")
     IO.inspect(opts)
+    IO.inspect(Process.info(self(), :current_stacktrace))
 
     producer_opts = [
       app_name: opts[:app_name],

@@ -175,7 +175,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
             "shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}]"
         )
 
-        :ok = Pipeline.stop(app_name, state.shard_id)
+        :ok = Pipeline.stop(state)
         %{state | lease_holder: false, lease_count_increment_time: current_time()}
 
       {:error, e} ->
@@ -201,7 +201,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
         }
 
         notify({:lease_taken, state}, state)
-        :ok = Pipeline.start(app_name, state.shard_id)
+        :ok = Pipeline.start(state)
         state
 
       :lease_take_failed ->
