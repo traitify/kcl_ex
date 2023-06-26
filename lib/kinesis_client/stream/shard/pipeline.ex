@@ -7,6 +7,9 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
   alias KinesisClient.Stream.Shard.Producer
 
   def start_link(opts) do
+    IO.puts("Pipeline start_link opts")
+    IO.inspect(opts)
+
     producer_opts = [
       app_name: opts[:app_name],
       shard_id: opts[:shard_id],
@@ -62,8 +65,8 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
     Broadway.start_link(__MODULE__, pipeline_opts)
   end
 
-  def start(app_name, shard_id) do
-    names = Broadway.producer_names(name(app_name, shard_id))
+  def start(app_state) do
+    names = Broadway.producer_names(name(app_state.app_name, app_state.shard_id))
 
     errors =
       Enum.reduce(names, [], fn name, errs ->
@@ -82,8 +85,8 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
     end
   end
 
-  def stop(app_name, shard_id) do
-    names = Broadway.producer_names(name(app_name, shard_id))
+  def stop(app_state) do
+    names = Broadway.producer_names(name(app_state.app_name, app_state.shard_id))
 
     errors =
       Enum.reduce(names, [], fn name, errs ->

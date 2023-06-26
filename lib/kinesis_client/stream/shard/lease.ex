@@ -79,7 +79,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
       IO.puts("at the end of the day we probably only really need adapter state")
       IO.inspect(state)
-      :ok = state.pipeline.start(state.app_name, state.shard_id)
+      :ok = state.pipeline.start(state)
     end
 
     notify({:initialized, new_state}, state)
