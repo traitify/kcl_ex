@@ -42,8 +42,6 @@ defmodule KinesisClient.Stream.Shard do
       {Pipeline, pipeline_opts}
     ]
 
-    IO.puts("in shard supervisor init. below are pipeline opts")
-    IO.inspect(pipeline_opts)
     Supervisor.init(children, strategy: :one_for_all)
   end
 
