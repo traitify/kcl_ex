@@ -19,6 +19,7 @@ defmodule KinesisClient.Stream.Shard do
     ]
 
     pipeline_opts = [
+      app_state_opts: opts[:app_state_opts],
       app_name: opts[:app_name],
       shard_id: opts[:shard_id],
       lease_owner: opts[:lease_owner],
