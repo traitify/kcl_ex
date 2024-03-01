@@ -1,14 +1,14 @@
 defmodule KinesisClient.Stream.AppState.Dynamo do
   @moduledoc false
-  @behaviour AppStateAdapter
+
+  @behaviour KinesisClient.Stream.AppState.Adapter
 
   alias ExAws.Dynamo
-  alias KinesisClient.Stream.AppState.Adapter, as: AppStateAdapter
   alias KinesisClient.Stream.AppState.ShardLease
 
   require Logger
 
-  @impl AppStateAdapter
+  @impl true
   def initialize(app_name, _opts) do
     case confirm_table_created(app_name) do
       :ok -> :ok
@@ -17,11 +17,17 @@ defmodule KinesisClient.Stream.AppState.Dynamo do
   end
 
   defp create_table(app_name) do
-    case app_name
-         |> Dynamo.create_table("shard_id", %{shard_id: :string}, 10, 10)
-         |> ExAws.request() do
-      {:ok, %{}} -> confirm_table_created(app_name)
-    end
+    app_name
+    |> send_create_table_request()
+    |> confirm_table_created()
+  end
+
+  defp send_create_table_request(app_name) do
+    app_name
+    |> Dynamo.create_table("shard_id", [{:shard_id, :string}], 10, 10)
+    |> ExAws.request()
+
+    app_name
   end
 
   defp confirm_table_created(app_name, attempts \\ 1) do
@@ -40,8 +46,8 @@ defmodule KinesisClient.Stream.AppState.Dynamo do
     end
   end
 
-  @impl AppStateAdapter
-  def create_lease(app_name, shard_id, lease_owner, _opts \\ []) do
+  @impl true
+  def create_lease(app_name, _stream_name, shard_id, lease_owner, _opts \\ []) do
     update_opt = [condition_expression: "attribute_not_exists(shard_id)"]
 
     shard_lease = %ShardLease{
@@ -65,8 +71,8 @@ defmodule KinesisClient.Stream.AppState.Dynamo do
     end
   end
 
-  @impl AppStateAdapter
-  def get_lease(app_name, shard_id, _opts) do
+  @impl true
+  def get_lease(app_name, _stream_name, shard_id, _opts) do
     Logger.debug("(get_lease).app_name: #{app_name}")
     Logger.debug("(get_lease).shard_id: #{shard_id}")
 
@@ -79,8 +85,13 @@ defmodule KinesisClient.Stream.AppState.Dynamo do
     end
   end
 
-  @impl AppStateAdapter
-  def renew_lease(app_name, %{shard_id: shard_id, lease_count: lease_count} = shard_lease, _opts) do
+  @impl true
+  def renew_lease(
+        app_name,
+        _stream_name,
+        %{shard_id: shard_id, lease_count: lease_count} = shard_lease,
+        _opts
+      ) do
     updated_count = lease_count + 1
 
     update_opt = [
@@ -103,8 +114,8 @@ defmodule KinesisClient.Stream.AppState.Dynamo do
     end
   end
 
-  @impl AppStateAdapter
-  def take_lease(app_name, shard_id, new_lease_owner, lease_count, _opts) do
+  @impl true
+  def take_lease(app_name, _stream_name, shard_id, new_lease_owner, lease_count, _opts) do
     updated_count = lease_count + 1
 
     update_opt = [
@@ -127,8 +138,8 @@ defmodule KinesisClient.Stream.AppState.Dynamo do
     end
   end
 
-  @impl AppStateAdapter
-  def update_checkpoint(app_name, shard_id, lease_owner, checkpoint, _opts) do
+  @impl true
+  def update_checkpoint(app_name, _stream_name, shard_id, lease_owner, checkpoint, _opts) do
     Logger.debug(
       "AppState.Dynamo updating checkpoint: [checkpoint: #{checkpoint}, shard_id: #{shard_id}]"
     )
@@ -152,8 +163,8 @@ defmodule KinesisClient.Stream.AppState.Dynamo do
     end
   end
 
-  @impl AppStateAdapter
-  def close_shard(app_name, shard_id, lease_owner, _opts) do
+  @impl true
+  def close_shard(app_name, _stream_name, shard_id, lease_owner, _opts) do
     update_opt = [
       condition_expression: "lease_owner = :lo",
       expression_attribute_values: %{

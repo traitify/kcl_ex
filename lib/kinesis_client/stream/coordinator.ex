@@ -85,7 +85,7 @@ defmodule KinesisClient.Stream.Coordinator do
   def handle_cast({:close_shard, shard_id}, %{shard_ref_map: shards, stream_name: sn} = state) do
     {ref, _} = Enum.find(shards, fn {_monitor_ref, in_shard_id} -> in_shard_id == shard_id end)
 
-    Process.demonitor(ref, :flush)
+    Process.demonitor(ref, [:flush])
     Shard.stop(Shard.name(sn, shard_id))
 
     {:noreply, state}
@@ -230,8 +230,8 @@ defmodule KinesisClient.Stream.Coordinator do
     end)
   end
 
-  defp get_lease(shard_id, %{app_name: app_name, app_state_opts: app_state_opts}) do
-    AppState.get_lease(app_name, shard_id, app_state_opts)
+  defp get_lease(shard_id, %{app_name: app_name, app_state_opts: app_state_opts} = state) do
+    AppState.get_lease(app_name, state.stream_name, shard_id, app_state_opts)
   end
 
   # Start a shard and return an updated worker map with the %{lease_ref => pid}

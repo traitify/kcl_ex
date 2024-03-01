@@ -3,9 +3,16 @@ defmodule KinesisClient.Stream.AppState.Ecto.Migration do
   use Ecto.Migration
 
   def up do
-    execute(
-      "CREATE TABLE IF NOT EXISTS shard_lease (shard_id VARCHAR(255) PRIMARY KEY, checkpoint VARCHAR(255), lease_owner VARCHAR(255), lease_count INTEGER, completed BOOLEAN)"
-    )
+    execute("""
+      CREATE TABLE IF NOT EXISTS
+        shard_lease (shard_id VARCHAR(255) PRIMARY KEY,
+        app_name VARCHAR(255),
+        stream_name VARCHAR(255),
+        checkpoint VARCHAR(255),
+        lease_owner VARCHAR(255),
+        lease_count INTEGER,
+        completed BOOLEAN)
+    """)
 
     create_if_not_exists(unique_index(:shard_lease, [:shard_id]))
   end

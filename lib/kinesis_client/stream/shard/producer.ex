@@ -110,7 +110,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
     )
 
     timer = Process.send_after(self(), :shard_closed, state.shutdown_delay)
-    AppState.close_shard(state.app_name, state.shard_id, state.app_state_opts)
+    AppState.close_shard(state.app_name, state.stream_name, state.shard_id, state.app_state_opts)
     :ok = Coordinator.close_shard(coordinator, shard_id)
     {:noreply, %{state | shard_closed_timer: timer}}
   end
@@ -122,6 +122,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
     :ok =
       AppState.update_checkpoint(
         state.app_name,
+        state.stream_name,
         state.shard_id,
         state.lease_owner,
         checkpoint,
@@ -164,6 +165,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
     :ok =
       AppState.update_checkpoint(
         state.shard_id,
+        state.stream_name,
         state.lease_owner,
         checkpoint,
         state.app_state_opts
@@ -195,7 +197,12 @@ defmodule KinesisClient.Stream.Shard.Producer do
   @impl GenStage
   def handle_call(:start, from, state) do
     {:noreply, records, new_state} =
-      case AppState.get_lease(state.app_name, state.shard_id, state.app_state_opts) do
+      case AppState.get_lease(
+             state.app_name,
+             state.stream_name,
+             state.shard_id,
+             state.app_state_opts
+           ) do
         %{checkpoint: nil} ->
           get_records(%{
             state

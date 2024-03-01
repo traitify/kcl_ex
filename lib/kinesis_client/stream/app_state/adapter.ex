@@ -10,11 +10,17 @@ defmodule KinesisClient.Stream.AppState.Adapter do
   """
   @callback initialize(app_name :: String.t(), opts :: keyword) :: :ok | {:error, any}
 
-  @callback get_lease(app_name :: String.t(), shard_id :: String.t(), opts :: keyword) ::
+  @callback get_lease(
+              app_name :: String.t(),
+              stream_name :: String.t(),
+              shard_id :: String.t(),
+              opts :: keyword
+            ) ::
               DynamoShardLease.t() | EctoShardLease.t() | :not_found | {:error, any}
 
   @callback create_lease(
               app_name :: String.t(),
+              stream_name :: String.t(),
               shard_id :: String.t(),
               lease_owner :: String.t(),
               opts :: keyword
@@ -23,6 +29,7 @@ defmodule KinesisClient.Stream.AppState.Adapter do
 
   @callback update_checkpoint(
               app_name :: String.t(),
+              stream_name :: String.t(),
               shard_id :: String.t(),
               lease_owner :: String.t(),
               checkpoint :: String.t(),
@@ -30,11 +37,17 @@ defmodule KinesisClient.Stream.AppState.Adapter do
             ) ::
               :ok | {:error, any}
 
-  @callback renew_lease(app_name :: String.t(), shard_lease :: DynamoShardLease.t() | EctoShardLease.t(), opts :: keyword) ::
+  @callback renew_lease(
+              app_name :: String.t(),
+              stream_name :: String.t(),
+              shard_lease :: DynamoShardLease.t() | EctoShardLease.t(),
+              opts :: keyword
+            ) ::
               {:ok, new_lease_count :: integer} | :lease_renew_failed | {:error, any}
 
   @callback take_lease(
               app_name :: String.t(),
+              stream_name :: String.t(),
               shard_id :: String.t(),
               new_owner :: String.t(),
               lease_count :: integer,
@@ -44,6 +57,7 @@ defmodule KinesisClient.Stream.AppState.Adapter do
 
   @callback close_shard(
               app_name :: String.t(),
+              stream_name :: String.t(),
               shard_id :: String.t(),
               lease_owner :: String.t(),
               opts :: keyword
