@@ -4,13 +4,31 @@ defmodule KinesisClient.Stream.AppState.Ecto do
   @behaviour KinesisClient.Stream.AppState.Adapter
 
   alias KinesisClient.Stream.AppState.Ecto.Migration
+  alias KinesisClient.Stream.AppState.Ecto.NewColumnsMigration
   alias KinesisClient.Stream.AppState.Ecto.ShardLeases
 
   @impl true
   def initialize(_app_name, opts) do
     repo = Keyword.get(opts, :repo)
 
-    case Ecto.Migrator.up(repo, version(), Migration) do
+    # NOTE: Uncomment the following lines after successfully
+    # updating assessment_service shard_lease table and running backfill,
+    # and also remove the NewColumnsMigration and its references.
+    #
+    # case Ecto.Migrator.up(repo, version(), Migration) do
+    #   :ok -> :ok
+    #   :already_up -> :ok
+    # end
+
+    with :ok <- run_migrator(repo, Migration) do
+      Process.sleep(1000)
+
+      run_migrator(repo, NewColumnsMigration)
+    end
+  end
+
+  defp run_migrator(repo, module) do
+    case Ecto.Migrator.up(repo, version(), module) do
       :ok -> :ok
       :already_up -> :ok
     end
