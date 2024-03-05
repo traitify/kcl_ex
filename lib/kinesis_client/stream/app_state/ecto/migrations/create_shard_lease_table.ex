@@ -1,4 +1,4 @@
-defmodule KinesisClient.Stream.AppState.Ecto.Migration do
+defmodule KinesisClient.Stream.AppState.Ecto.CreateShardLeaseTable do
   @moduledoc false
   use Ecto.Migration
 
@@ -10,7 +10,5 @@ defmodule KinesisClient.Stream.AppState.Ecto.Migration do
     create_if_not_exists(unique_index(:shard_lease, [:shard_id]))
   end
 
-  def down do
-    execute("DROP TABLE IF EXISTS shard_lease")
-  end
+  def version, do: 20_240_304_000_001
 end
