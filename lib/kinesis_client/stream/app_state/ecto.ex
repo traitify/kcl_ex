@@ -3,16 +3,21 @@ defmodule KinesisClient.Stream.AppState.Ecto do
 
   @behaviour KinesisClient.Stream.AppState.Adapter
 
-  alias KinesisClient.Stream.AppState.Ecto.Migration
+  alias KinesisClient.Stream.AppState.Ecto.AddAppAndStreamNameColumns
+  alias KinesisClient.Stream.AppState.Ecto.CreateShardLeaseTable
+  alias KinesisClient.Stream.AppState.Ecto.ShardLease
   alias KinesisClient.Stream.AppState.Ecto.ShardLeases
 
-  @impl true
-  def initialize(_app_name, opts) do
-    repo = Keyword.get(opts, :repo)
+  @migrations [
+    {CreateShardLeaseTable.version(), CreateShardLeaseTable},
+    {AddAppAndStreamNameColumns.version(), AddAppAndStreamNameColumns}
+  ]
 
-    case Ecto.Migrator.up(repo, version(), Migration) do
-      :ok -> :ok
-      :already_up -> :ok
+  @impl true
+  def initialize(app_name, opts) do
+    with {:ok, repo} <- get_repo(opts),
+         :ok <- run_migrations(repo) do
+      backfill_app_name_and_stream_name_columns(repo, app_name, opts)
     end
   end
 
@@ -117,10 +122,21 @@ defmodule KinesisClient.Stream.AppState.Ecto do
     end
   end
 
-  defp version do
-    DateTime.utc_now()
-    |> Calendar.strftime("%Y%m%d%H%M%S")
-    |> String.to_integer()
+  defp get_repo(opts), do: {:ok, Keyword.get(opts, :repo)}
+
+  defp run_migrations(repo, migrations \\ @migrations) do
+    Enum.each(migrations, fn {version, module} -> Ecto.Migrator.up(repo, version, module) end)
+  end
+
+  defp backfill_app_name_and_stream_name_columns(repo, app_name, opts) do
+    stream_name = Keyword.get(opts, :stream_name)
+    params = %{app_name: nil, stream_name: nil}
+
+    ShardLease.query()
+    |> ShardLease.build_get_query(params)
+    |> repo.update_all(set: [app_name: app_name, stream_name: stream_name])
+
+    :ok
   end
 
   defp already_exists(%{shard_id: ["has already been taken"]}), do: :already_exists
