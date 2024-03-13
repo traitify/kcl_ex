@@ -31,16 +31,24 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLease do
     Enum.reduce(params, query, &query_by(&1, &2))
   end
 
+  defp query_by({:shard_id, shard_id}, query) do
+    where(query, [sl], sl.shard_id == ^shard_id)
+  end
+
+  defp query_by({:app_name, nil}, query) do
+    where(query, [sl], is_nil(sl.app_name))
+  end
+
   defp query_by({:app_name, app_name}, query) do
     where(query, [sl], sl.app_name == ^app_name)
   end
 
-  defp query_by({:stream_name, stream_name}, query) do
-    where(query, [sl], sl.stream_name == ^stream_name)
+  defp query_by({:stream_name, nil}, query) do
+    where(query, [sl], is_nil(sl.stream_name))
   end
 
-  defp query_by({:shard_id, shard_id}, query) do
-    where(query, [sl], sl.shard_id == ^shard_id)
+  defp query_by({:stream_name, stream_name}, query) do
+    where(query, [sl], sl.stream_name == ^stream_name)
   end
 
   defp query_by({:lease_owner, lease_owner}, query) do

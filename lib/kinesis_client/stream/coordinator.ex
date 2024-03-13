@@ -92,7 +92,8 @@ defmodule KinesisClient.Stream.Coordinator do
   end
 
   def create_table_if_not_exists(state) do
-    AppState.initialize(state.app_name, state.app_state_opts)
+    opts = state.app_state_opts ++ [stream_name: state.stream_name]
+    AppState.initialize(state.app_name, opts)
   end
 
   @spec remove_missing_parents(Map.t()) :: Map.t()
