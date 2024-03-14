@@ -8,13 +8,15 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
     lease_opts = build_lease_opts(pipeline: KinesisClient.TestPipeline)
 
     AppStateMock
-    |> stub(:get_lease, fn in_app_name, in_shard_id, _ ->
+    |> stub(:get_lease, fn in_app_name, in_stream_name, in_shard_id, _ ->
       assert in_app_name == lease_opts[:app_name]
+      assert in_stream_name == lease_opts[:stream_name]
       assert in_shard_id == lease_opts[:shard_id]
       :not_found
     end)
-    |> stub(:create_lease, fn app_name, shard_id, lease_owner, _opts ->
+    |> stub(:create_lease, fn app_name, stream_name, shard_id, lease_owner, _opts ->
       assert app_name == lease_opts[:app_name]
+      assert stream_name == lease_opts[:stream_name]
       assert shard_id == lease_opts[:shard_id]
       assert lease_owner == lease_opts[:lease_owner]
 
@@ -36,10 +38,10 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
     lease_opts = build_lease_opts()
 
     AppStateMock
-    |> stub(:get_lease, fn _in_app_name, _in_shard_id, _ ->
+    |> stub(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
       :not_found
     end)
-    |> expect(:create_lease, fn _app_name, _shard_id, _lease_owner, _opts ->
+    |> expect(:create_lease, fn _app_name, _in_stream_name, _shard_id, _lease_owner, _opts ->
       :already_exists
     end)
 
@@ -59,7 +61,10 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
       lease_opts = build_lease_opts()
       shard_lease = build_shard_lease(lease_count: shard_lease_count)
 
-      stub(AppStateMock, :get_lease, fn _in_app_name, _in_shard_id, _ -> shard_lease end)
+      stub(AppStateMock, :get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+        shard_lease
+      end)
+
       {:ok, pid} = start_supervised({Lease, lease_opts})
 
       assert_receive {:initialized, lease_state}, 1_000
@@ -78,11 +83,12 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
         build_shard_lease(lease_count: shard_lease_count, lease_owner: lease_opts[:lease_owner])
 
       AppStateMock
-      |> stub(:get_lease, fn _in_app_name, _in_shard_id, _ ->
+      |> stub(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
         shard_lease
       end)
-      |> expect(:renew_lease, fn app_name, %{lease_count: lc} = sl, _ ->
+      |> expect(:renew_lease, fn app_name, stream_name, %{lease_count: lc} = sl, _ ->
         assert app_name == lease_opts[:app_name]
+        assert stream_name == lease_opts[:stream_name]
         assert sl.shard_id == shard_lease.shard_id
         assert sl.lease_count == shard_lease.lease_count
         assert sl.lease_owner == shard_lease.lease_owner
@@ -106,11 +112,12 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
     shard_lease = build_shard_lease(lease_count: shard_lease_count)
 
     AppStateMock
-    |> stub(:get_lease, fn _in_app_name, _in_shard_id, _ ->
+    |> stub(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
       shard_lease
     end)
-    |> expect(:take_lease, fn app_name, shard_id, new_owner, lc, _opts ->
+    |> expect(:take_lease, fn app_name, stream_name, shard_id, new_owner, lc, _opts ->
       assert app_name == lease_opts[:app_name]
+      assert stream_name == lease_opts[:stream_name]
       assert shard_id == lease_opts[:shard_id]
       assert new_owner == lease_opts[:lease_owner]
       assert lc == 12
@@ -137,7 +144,10 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
     lease_opts = build_lease_opts(lease_expiry: 5_000, renew_interval: 600)
     shard_lease = build_shard_lease(lease_count: shard_lease_count)
 
-    stub(AppStateMock, :get_lease, fn _in_app_name, _in_shard_id, _ -> shard_lease end)
+    stub(AppStateMock, :get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+      shard_lease
+    end)
+
     {:ok, _pid} = start_supervised({Lease, lease_opts})
 
     assert_receive {:initialized, %{lease_count_increment_time: _lcit} = lease_state}, 1_000
@@ -160,8 +170,9 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
         shard_id: "shard-000001",
         lease_owner: worker_ref(),
         app_name: "my_streaming_app",
+        stream_name: "my_stream",
         notify: self(),
-        app_state_opts: [adapter: AppStateMock]
+        app_state_opts: [adapter: :test]
       ],
       overrides
     )

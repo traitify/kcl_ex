@@ -44,21 +44,21 @@ defmodule KinesisClient.Stream.AppState.DynamoTest do
   test "get_lease/3 is successful", %{app_name: app_name} do
     shard_id = random_string()
     worker_ref = worker_ref()
-    result = AppState.create_lease(app_name, shard_id, worker_ref, [])
+    result = AppState.create_lease(app_name, "", shard_id, worker_ref, [])
     assert result == :ok
 
-    %ShardLease{} = AppState.get_lease(app_name, shard_id, [])
+    %ShardLease{} = AppState.get_lease(app_name, "", shard_id, [])
   end
 
   describe "renew_lease/3" do
     test "successfully increments lease_count", %{app_name: app_name} do
       shard_id = random_string()
       worker_ref = worker_ref()
-      result = AppState.create_lease(app_name, shard_id, worker_ref, [])
+      result = AppState.create_lease(app_name, "", shard_id, worker_ref, [])
       assert result == :ok
 
       shard_lease = %ShardLease{lease_count: 1, shard_id: shard_id, lease_owner: worker_ref}
-      assert {:ok, result} = AppState.renew_lease(app_name, shard_lease, [])
+      assert {:ok, result} = AppState.renew_lease(app_name, "", shard_lease, [])
 
       assert result == shard_lease.lease_count + 1
     end
@@ -66,21 +66,21 @@ defmodule KinesisClient.Stream.AppState.DynamoTest do
     test "returns error if lease_owner does not match input lease_owner", %{app_name: app_name} do
       shard_id = random_string()
       lease_owner = worker_ref()
-      result = AppState.create_lease(app_name, shard_id, lease_owner, [])
+      result = AppState.create_lease(app_name, "", shard_id, lease_owner, [])
       assert result == :ok
 
       shard_lease = %ShardLease{lease_count: 1, shard_id: shard_id, lease_owner: worker_ref()}
-      assert {:error, :lease_renew_failed} = AppState.renew_lease(app_name, shard_lease, [])
+      assert {:error, :lease_renew_failed} = AppState.renew_lease(app_name, "", shard_lease, [])
     end
 
     test "returns error if lease_count does not match input lease_count", %{app_name: app_name} do
       shard_id = random_string()
       lease_owner = worker_ref()
-      result = AppState.create_lease(app_name, shard_id, lease_owner, [])
+      result = AppState.create_lease(app_name, "", shard_id, lease_owner, [])
       assert result == :ok
 
       shard_lease = %ShardLease{lease_count: 2, shard_id: shard_id, lease_owner: lease_owner}
-      assert {:error, :lease_renew_failed} = AppState.renew_lease(app_name, shard_lease, [])
+      assert {:error, :lease_renew_failed} = AppState.renew_lease(app_name, "", shard_lease, [])
     end
   end
 
@@ -89,10 +89,10 @@ defmodule KinesisClient.Stream.AppState.DynamoTest do
       shard_id = random_string()
       old_lease_owner = worker_ref()
       new_lease_owner = worker_ref()
-      result = AppState.create_lease(app_name, shard_id, old_lease_owner, [])
+      result = AppState.create_lease(app_name, "", shard_id, old_lease_owner, [])
       assert result == :ok
 
-      assert {:ok, result} = AppState.take_lease(app_name, shard_id, new_lease_owner, 1, [])
+      assert {:ok, result} = AppState.take_lease(app_name, "", shard_id, new_lease_owner, 1, [])
 
       assert result == 2
     end
@@ -101,21 +101,21 @@ defmodule KinesisClient.Stream.AppState.DynamoTest do
       shard_id = random_string()
       old_lease_owner = worker_ref()
       new_lease_owner = worker_ref()
-      result = AppState.create_lease(app_name, shard_id, old_lease_owner, [])
+      result = AppState.create_lease(app_name, "", shard_id, old_lease_owner, [])
       assert result == :ok
 
       assert {:error, :lease_take_failed} =
-               AppState.take_lease(app_name, shard_id, new_lease_owner, 3, [])
+               AppState.take_lease(app_name, "", shard_id, new_lease_owner, 3, [])
     end
 
     test "unsuccessful if new_lease_owner equals current lease ownere", %{app_name: app_name} do
       shard_id = random_string()
       lease_owner = worker_ref()
-      result = AppState.create_lease(app_name, shard_id, lease_owner, [])
+      result = AppState.create_lease(app_name, "", shard_id, lease_owner, [])
       assert result == :ok
 
       assert {:error, :lease_take_failed} =
-               AppState.take_lease(app_name, shard_id, lease_owner, 1, [])
+               AppState.take_lease(app_name, "", shard_id, lease_owner, 1, [])
     end
   end
 
@@ -125,10 +125,10 @@ defmodule KinesisClient.Stream.AppState.DynamoTest do
       lease_owner = worker_ref()
       checkpoint = "239801209190"
 
-      result = AppState.create_lease(app_name, shard_id, lease_owner, [])
+      result = AppState.create_lease(app_name, "", shard_id, lease_owner, [])
       assert result == :ok
 
-      assert :ok = AppState.update_checkpoint(app_name, shard_id, lease_owner, checkpoint, [])
+      assert :ok = AppState.update_checkpoint(app_name, "", shard_id, lease_owner, checkpoint, [])
     end
   end
 
@@ -137,10 +137,10 @@ defmodule KinesisClient.Stream.AppState.DynamoTest do
       shard_id = random_string()
       lease_owner = worker_ref()
 
-      result = AppState.create_lease(app_name, shard_id, lease_owner, [])
+      result = AppState.create_lease(app_name, "", shard_id, lease_owner, [])
       assert result == :ok
 
-      assert :ok = AppState.close_shard(app_name, shard_id, lease_owner, [])
+      assert :ok = AppState.close_shard(app_name, "", shard_id, lease_owner, [])
     end
   end
 

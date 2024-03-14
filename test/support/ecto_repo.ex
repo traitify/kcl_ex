@@ -5,6 +5,8 @@ defmodule KinesisClient.Ecto.Repo do
   def one(_query, _opts \\ []) do
     %ShardLease{
       shard_id: "a.b.c",
+      app_name: "app_name",
+      stream_name: "stream_name",
       checkpoint: nil,
       completed: false,
       lease_count: 1,

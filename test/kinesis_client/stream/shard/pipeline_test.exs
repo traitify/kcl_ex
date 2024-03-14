@@ -10,7 +10,7 @@ defmodule KinesisClient.Stream.Shard.PipelineTest do
 
     opts = [
       app_name: app_name,
-      app_state_opts: [adapter: AppStateMock],
+      app_state_opts: [adapter: :test],
       shard_id: shard_id,
       kinesis_opts: [adapter: KinesisMock],
       shard_consumer: KinesisClient.TestShardConsumer,
@@ -52,7 +52,7 @@ defmodule KinesisClient.Stream.Shard.PipelineTest do
        }}
     end)
 
-    expect(AppStateMock, :get_lease, fn _, _, _ ->
+    expect(AppStateMock, :get_lease, fn _, _, _, _ ->
       %ShardLease{checkpoint: nil}
     end)
 
@@ -60,7 +60,7 @@ defmodule KinesisClient.Stream.Shard.PipelineTest do
 
     assert Process.alive?(pid)
 
-    assert :ok == Pipeline.start(app_name, shard_id)
+    assert :ok == Pipeline.start(%{app_name: app_name, shard_id: shard_id})
   end
 
   test "can stop producer" do
@@ -73,6 +73,6 @@ defmodule KinesisClient.Stream.Shard.PipelineTest do
 
     assert Process.alive?(pid)
 
-    assert :ok == Pipeline.stop(app_name, shard_id)
+    assert :ok == Pipeline.stop(%{app_name: app_name, shard_id: shard_id})
   end
 end

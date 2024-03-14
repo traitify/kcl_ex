@@ -75,11 +75,13 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
     end)
 
     expect(AppStateMock, :update_checkpoint, fn in_app_name,
+                                                in_stream_name,
                                                 in_shard_id,
                                                 in_lease_owner,
                                                 in_checkpoint,
                                                 _opts ->
       assert in_app_name == opts[:app_name]
+      assert in_stream_name == opts[:stream_name]
       assert in_shard_id == opts[:shard_id]
       assert in_lease_owner == opts[:lease_owner]
       assert in_checkpoint == "12345"
@@ -100,7 +102,7 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
       shard_id: "shardId-000000000000",
       stream_name: "kcl-ex-test-stream",
       kinesis_opts: [adapter: KinesisMock],
-      app_state_opts: [adapter: AppStateMock],
+      app_state_opts: [adapter: :test],
       status: :stopped,
       lease_owner: worker_ref(),
       notify_pid: self()

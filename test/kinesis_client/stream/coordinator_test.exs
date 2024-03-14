@@ -46,10 +46,10 @@ defmodule KinesisClient.Stream.CoordinatorTest do
       assert in_app_name == opts[:app_name]
       :ok
     end)
-    |> stub(:get_lease, fn _, _, _ ->
+    |> stub(:get_lease, fn _, _, _, _ ->
       :not_found
     end)
-    |> stub(:create_lease, fn _, _, _, _ ->
+    |> stub(:create_lease, fn _, _, _, _, _ ->
       :ok
     end)
 
@@ -86,10 +86,10 @@ defmodule KinesisClient.Stream.CoordinatorTest do
       assert in_app_name == opts[:app_name]
       :ok
     end)
-    |> stub(:get_lease, fn _, _, _ ->
+    |> stub(:get_lease, fn _, _, _, _ ->
       :not_found
     end)
-    |> stub(:create_lease, fn _, _, _, _ ->
+    |> stub(:create_lease, fn _, _, _, _, _ ->
       :ok
     end)
 
@@ -128,7 +128,7 @@ defmodule KinesisClient.Stream.CoordinatorTest do
       assert in_app_name == opts[:app_name]
       :ok
     end)
-    |> stub(:get_lease, fn _, shard_id, _ ->
+    |> stub(:get_lease, fn _, _, shard_id, _ ->
       case shard_id do
         "shardId-000000000000" -> shard0_lease
         "shardId-000000000001" -> shard1_lease
@@ -179,7 +179,7 @@ defmodule KinesisClient.Stream.CoordinatorTest do
       assert in_app_name == opts[:app_name]
       :ok
     end)
-    |> stub(:get_lease, fn _, shard_id, _ ->
+    |> stub(:get_lease, fn _, _, shard_id, _ ->
       case shard_id do
         "shardId-000000000000" -> shard0_lease
         "shardId-000000000001" -> shard1_lease
@@ -220,10 +220,10 @@ defmodule KinesisClient.Stream.CoordinatorTest do
       assert in_app_name == opts[:app_name]
       :ok
     end)
-    |> stub(:get_lease, fn _, _, _ ->
+    |> stub(:get_lease, fn _, _, _, _ ->
       :not_found
     end)
-    |> stub(:create_lease, fn _, _, _, _ ->
+    |> stub(:create_lease, fn _, _, _, _, _ ->
       :ok
     end)
 
@@ -240,7 +240,7 @@ defmodule KinesisClient.Stream.CoordinatorTest do
     opts = [
       name: coordinator_name,
       app_name: app_name,
-      app_state_opts: [adapter: AppStateMock],
+      app_state_opts: [adapter: :test],
       stream_name: @stream_name,
       shard_supervisor_name: @supervisor_name,
       notify_pid: self(),
@@ -250,7 +250,7 @@ defmodule KinesisClient.Stream.CoordinatorTest do
         coordinator_name: coordinator_name,
         lease_owner: worker_ref(),
         pipeline: KinesisClient.TestPipeline,
-        app_state_opts: [adapter: AppStateMock],
+        app_state_opts: [adapter: :test],
         processors: [
           default: [
             concurrency: 1,
