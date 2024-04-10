@@ -13,7 +13,9 @@ defmodule KinesisClient.Stream.AppState.ShardLeaseTest do
                "completed" => %{"BOOL" => "false"},
                "lease_count" => %{"NULL" => "true"},
                "lease_owner" => %{"NULL" => "true"},
-               "shard_id" => %{"NULL" => "true"}
+               "shard_id" => %{"NULL" => "true"},
+               "app_name" => %{"NULL" => "true"},
+               "stream_name" => %{"NULL" => "true"}
              }
            }
   end

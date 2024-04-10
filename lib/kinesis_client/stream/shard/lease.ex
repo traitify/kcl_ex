@@ -18,6 +18,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
   defstruct [
     :app_name,
+    :stream_name,
     :shard_id,
     :lease_owner,
     :lease_count,
@@ -36,6 +37,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
   def init(opts) do
     state = %__MODULE__{
       app_name: opts[:app_name],
+      stream_name: opts[:stream_name],
       shard_id: opts[:shard_id],
       lease_owner: opts[:lease_owner],
       app_state_opts: Keyword.get(opts, :app_state_opts, []),
@@ -82,17 +84,18 @@ defmodule KinesisClient.Stream.Shard.Lease do
   def handle_info(:take_or_renew_lease, state) do
     Process.send_after(self(), :take_or_renew_lease, state.renew_interval)
 
-    reply =
-      case get_lease(state) do
-        s ->
-          {:noreply, take_or_renew_lease(s, state)}
+    case get_lease(state) do
+      {:error, e} ->
+        Logger.error("Error fetching shard #{state.share_id}: #{inspect(e)}")
+        {:noreply, state}
 
-        {:error, e} ->
-          Logger.error("Error fetching shard #{state.share_id}: #{inspect(e)}")
-          {:noreply, state}
-      end
+      :not_found ->
+        Logger.error("shard #{state.share_id} not found")
+        {:noreply, state}
 
-    reply
+      s ->
+        {:noreply, take_or_renew_lease(s, state)}
+    end
   end
 
   defp take_or_renew_lease(shard_lease, %{lease_expiry: lease_expiry} = state) do
@@ -131,7 +134,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
   end
 
   defp get_lease(state) do
-    AppState.get_lease(state.app_name, state.shard_id, state.app_state_opts)
+    AppState.get_lease(state.app_name, state.stream_name, state.shard_id, state.app_state_opts)
   end
 
   defp create_lease(%{app_state_opts: opts, app_name: app_name, lease_owner: lease_owner} = state) do
@@ -140,7 +143,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
         "#{lease_owner}]"
     )
 
-    case AppState.create_lease(app_name, state.shard_id, lease_owner, opts) do
+    case AppState.create_lease(app_name, state.stream_name, state.shard_id, lease_owner, opts) do
       :ok -> %{state | lease_holder: true, lease_count: 1}
       :already_exists -> %{state | lease_holder: false}
     end
@@ -154,7 +157,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
         "#{state.lease_owner}]"
     )
 
-    case AppState.renew_lease(app_name, shard_lease, opts) do
+    case AppState.renew_lease(app_name, state.stream_name, shard_lease, opts) do
       {:ok, ^expected} ->
         state = set_lease_count(expected, true, state)
         notify({:lease_renewed, state}, state)
@@ -182,7 +185,14 @@ defmodule KinesisClient.Stream.Shard.Lease do
       "Attempting to take lease: [lease_owner: #{state.lease_owner}, shard_id: #{state.shard_id}]"
     )
 
-    case AppState.take_lease(app_name, state.shard_id, state.lease_owner, state.lease_count, opts) do
+    case AppState.take_lease(
+           app_name,
+           state.stream_name,
+           state.shard_id,
+           state.lease_owner,
+           state.lease_count,
+           opts
+         ) do
       {:ok, ^expected} ->
         state = %{
           state

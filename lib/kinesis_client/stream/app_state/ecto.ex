@@ -22,11 +22,13 @@ defmodule KinesisClient.Stream.AppState.Ecto do
   end
 
   @impl true
-  def create_lease(_app_name, shard_id, lease_owner, opts) do
+  def create_lease(app_name, stream_name, shard_id, lease_owner, opts) do
     repo = Keyword.get(opts, :repo)
 
     attrs = %{
       shard_id: shard_id,
+      app_name: app_name,
+      stream_name: stream_name,
       lease_owner: lease_owner,
       completed: false,
       lease_count: 1
@@ -43,10 +45,11 @@ defmodule KinesisClient.Stream.AppState.Ecto do
   end
 
   @impl true
-  def get_lease(_app_name, shard_id, opts) do
+  def get_lease(app_name, stream_name, shard_id, opts) do
     repo = Keyword.get(opts, :repo)
+    shard_lease_params = %{shard_id: shard_id, app_name: app_name, stream_name: stream_name}
 
-    with {:ok, shard_lease} <- ShardLeases.get_shard_lease_by_id(shard_id, repo) do
+    with {:ok, shard_lease} <- ShardLeases.get_shard_lease(shard_lease_params, repo) do
       shard_lease
     else
       {:error, :not_found} -> :not_found
@@ -55,7 +58,8 @@ defmodule KinesisClient.Stream.AppState.Ecto do
 
   @impl true
   def renew_lease(
-        _app_name,
+        app_name,
+        stream_name,
         %{shard_id: shard_id, lease_owner: lease_owner, lease_count: lease_count},
         opts
       ) do
@@ -63,7 +67,13 @@ defmodule KinesisClient.Stream.AppState.Ecto do
 
     updated_count = lease_count + 1
 
-    shard_lease_params = %{shard_id: shard_id, lease_owner: lease_owner, lease_count: lease_count}
+    shard_lease_params = %{
+      shard_id: shard_id,
+      app_name: app_name,
+      stream_name: stream_name,
+      lease_owner: lease_owner,
+      lease_count: lease_count
+    }
 
     with {:ok, shard_lease} <- ShardLeases.get_shard_lease(shard_lease_params, repo),
          {:ok, _} <- ShardLeases.update_shard_lease(shard_lease, repo, lease_count: updated_count) do
@@ -74,12 +84,17 @@ defmodule KinesisClient.Stream.AppState.Ecto do
   end
 
   @impl true
-  def take_lease(_app_name, shard_id, new_lease_owner, lease_count, opts) do
+  def take_lease(app_name, stream_name, shard_id, new_lease_owner, lease_count, opts) do
     repo = Keyword.get(opts, :repo)
 
     updated_count = lease_count + 1
 
-    shard_lease_params = %{shard_id: shard_id, lease_count: lease_count}
+    shard_lease_params = %{
+      shard_id: shard_id,
+      app_name: app_name,
+      stream_name: stream_name,
+      lease_count: lease_count
+    }
 
     with {:ok, shard_lease} <- ShardLeases.get_shard_lease(shard_lease_params, repo),
          {:ok, true} <- lease_owner_not_match(shard_lease, new_lease_owner),
@@ -95,10 +110,15 @@ defmodule KinesisClient.Stream.AppState.Ecto do
   end
 
   @impl true
-  def update_checkpoint(_app_name, shard_id, lease_owner, checkpoint, opts) do
+  def update_checkpoint(app_name, stream_name, shard_id, lease_owner, checkpoint, opts) do
     repo = Keyword.get(opts, :repo)
 
-    shard_lease_params = %{shard_id: shard_id, lease_owner: lease_owner}
+    shard_lease_params = %{
+      shard_id: shard_id,
+      app_name: app_name,
+      stream_name: stream_name,
+      lease_owner: lease_owner
+    }
 
     with {:ok, shard_lease} <- ShardLeases.get_shard_lease(shard_lease_params, repo),
          {:ok, _} <- ShardLeases.update_shard_lease(shard_lease, repo, checkpoint: checkpoint) do
@@ -109,10 +129,15 @@ defmodule KinesisClient.Stream.AppState.Ecto do
   end
 
   @impl true
-  def close_shard(_app_name, shard_id, lease_owner, opts) do
+  def close_shard(app_name, stream_name, shard_id, lease_owner, opts) do
     repo = Keyword.get(opts, :repo)
 
-    shard_lease_params = %{shard_id: shard_id, lease_owner: lease_owner}
+    shard_lease_params = %{
+      shard_id: shard_id,
+      app_name: app_name,
+      stream_name: stream_name,
+      lease_owner: lease_owner
+    }
 
     with {:ok, shard_lease} <- ShardLeases.get_shard_lease(shard_lease_params, repo),
          {:ok, _} <- ShardLeases.update_shard_lease(shard_lease, repo, completed: true) do
