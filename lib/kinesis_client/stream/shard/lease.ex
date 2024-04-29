@@ -86,11 +86,11 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
     case get_lease(state) do
       {:error, e} ->
-        Logger.error("Error fetching shard #{state.share_id}: #{inspect(e)}")
+        Logger.error("Error fetching shard #{state.shard_id}: #{inspect(e)}")
         {:noreply, state}
 
       :not_found ->
-        Logger.error("shard #{state.share_id} not found")
+        Logger.error("shard #{state.shard_id} not found")
         {:noreply, state}
 
       s ->
