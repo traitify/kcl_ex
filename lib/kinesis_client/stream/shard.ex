@@ -14,6 +14,7 @@ defmodule KinesisClient.Stream.Shard do
   def init(opts) do
     lease_opts = [
       app_name: opts[:app_name],
+      stream_name: opts[:stream_name],
       shard_id: opts[:shard_id],
       lease_owner: opts[:lease_owner]
     ]
