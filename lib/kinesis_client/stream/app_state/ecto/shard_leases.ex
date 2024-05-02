@@ -1,4 +1,5 @@
 defmodule KinesisClient.Stream.AppState.Ecto.ShardLeases do
+
   alias KinesisClient.Stream.AppState.Ecto.ShardLease
 
   @spec get_shard_lease(map, Ecto.Repo.t()) :: {:error, :not_found} | {:ok, ShardLease.t()}
@@ -15,8 +16,7 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLeases do
   @spec get_shard_lease_by_id(String.t(), Ecto.Repo.t()) ::
           {:error, :not_found} | {:ok, ShardLease.t()}
   def get_shard_lease_by_id(shard_id, repo) do
-    %{shard_id: shard_id}
-    |> get_shard_lease(repo)
+    get_shard_lease(%{shard_id: shard_id}, repo)
   end
 
   @spec insert_shard_lease(map, Ecto.Repo.t()) ::
@@ -35,6 +35,19 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLeases do
     case repo.update(shard_lease_changeset) do
       {:ok, shard_lease} -> {:ok, shard_lease}
       {:error, changeset} -> {:error, changeset}
+    end
+  end
+
+  @spec delete_all_shard_leases_and_restart_workers(
+          Ecto.Repo.t(),
+          Supervisor.t() :: true | {:error, <<_::176>>}
+        )
+  def delete_all_shard_leases_and_restart_workers(repo, supervisor) do
+    with supervisor when not is_nil(supervisor) <- Process.whereis(supervisor),
+         :ok <- repo.delete_all(ShardLease) do
+      Process.exit(supervisor, :shutdown)
+    else
+      nil -> {:error, "Supervisor not running"}
     end
   end
 end
