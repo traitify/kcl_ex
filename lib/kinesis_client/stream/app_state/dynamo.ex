@@ -16,7 +16,8 @@ defmodule KinesisClient.Stream.AppState.Dynamo do
     end
   end
 
-  def delete_all_shard_leases_and_restart_workers(app_name, supervisor) do
+  @impl true
+  def delete_all_leases_and_restart_workers(supervisor, app_name, _opts) do
     case app_name
          |> Dynamo.scan()
          |> ExAws.request() do
