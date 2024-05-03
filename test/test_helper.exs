@@ -4,14 +4,14 @@ Mox.defmock(KinesisClient.Stream.AppStateMock, for: KinesisClient.Stream.AppStat
 Application.put_env(:ex_aws, :dynamodb,
   scheme: "http://",
   host: "localhost",
-  port: "4566",
+  port: "8000",
   region: "us-east-1"
 )
 
 Application.put_env(:ex_aws, :kinesis,
   scheme: "http://",
   host: "localhost",
-  port: "4566",
+  port: "8000",
   region: "us-east-1"
 )
 

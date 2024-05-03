@@ -16,6 +16,33 @@ defmodule KinesisClient.Stream.AppState.Dynamo do
     end
   end
 
+  def delete_all_shard_leases_and_restart_workers(app_name, supervisor) do
+    case app_name
+         |> Dynamo.scan()
+         |> ExAws.request() do
+      {:ok, items} ->
+        items["Items"]
+        |> Enum.each(fn lease ->
+          cond do
+            lease["shard_id"] ->
+
+              app_name
+              |> Dynamo.delete_item(%{"shard_id" => lease["shard_id"]["S"]})
+              |> ExAws.request()
+          end
+        end)
+
+        case Process.whereis(supervisor) do
+          nil -> {:error, "Supervisor not running"}
+          pid ->
+            Process.exit(pid, :shutdown)
+            {:ok, "Shard leases deleted and workers restarted"}
+        end
+
+      {:error, error} -> {:error, error}
+    end
+  end
+
   defp create_table(app_name) do
     app_name
     |> send_create_table_request()

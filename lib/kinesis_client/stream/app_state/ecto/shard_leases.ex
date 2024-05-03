@@ -37,17 +37,4 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLeases do
       {:error, changeset} -> {:error, changeset}
     end
   end
-
-  @spec delete_all_shard_leases_and_restart_workers(
-          Ecto.Repo.t(),
-          Supervisor.t() :: true | {:error, <<_::176>>}
-        )
-  def delete_all_shard_leases_and_restart_workers(repo, supervisor) do
-    with supervisor when not is_nil(supervisor) <- Process.whereis(supervisor),
-         :ok <- repo.delete_all(ShardLease) do
-      Process.exit(supervisor, :shutdown)
-    else
-      nil -> {:error, "Supervisor not running"}
-    end
-  end
 end

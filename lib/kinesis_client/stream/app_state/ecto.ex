@@ -22,6 +22,19 @@ defmodule KinesisClient.Stream.AppState.Ecto do
   end
 
   @impl true
+  def delete_all_shard_leases_and_restart_workers(opts, supervisor) do
+    repo = Keyword.get(opts, :repo)
+
+    with supervisor when not is_nil(supervisor) <- Process.whereis(supervisor),
+      :ok <- repo.delete_all(ShardLease) do
+
+      Process.exit(supervisor, :shutdown)
+    else
+      nil -> {:error, "Supervisor not running"}
+    end
+  end
+
+  @impl true
   def create_lease(app_name, stream_name, shard_id, lease_owner, opts) do
     repo = Keyword.get(opts, :repo)
 

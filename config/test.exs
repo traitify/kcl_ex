@@ -9,11 +9,11 @@ config :ex_aws,
 config :ex_aws, :dynamo_db,
   scheme: "http://",
   host: "localhost",
-  port: "4566",
+  port: "8000",
   region: "us-east-1"
 
 config :ex_aws, :kinesis,
   scheme: "http://",
   host: "localhost",
-  port: "4566",
+  port: "8000",
   region: "us-east-1"
