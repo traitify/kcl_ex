@@ -29,6 +29,8 @@ defmodule KinesisClient.Stream.AppState.Ecto do
       :ok <- repo.delete_all(ShardLease) do
 
       Process.exit(supervisor, :shutdown)
+
+      {:ok, "Shard leases deleted and workers restarted"}
     else
       nil -> {:error, "Supervisor not running"}
     end

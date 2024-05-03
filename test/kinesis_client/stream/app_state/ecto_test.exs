@@ -56,4 +56,23 @@ defmodule KinesisClient.Stream.AppState.EctoTest do
   test "closes shard" do
     assert Ecto.close_shard("app_name", "stream_name", "a.b.c", "test_owner", repo: Repo) == :ok
   end
+
+  describe "delete_all_leases_and_restart_workers" do
+    setup do
+      Process.flag(:trap_exit, true)
+
+      TestSupervisor.start_link([])
+      {:ok, supervisor: TestSupervisor}
+    end
+
+    test "deletes all leases and restarts the supervisor if the supervisor is running", %{supervisor: supervisor} do
+      result = Ecto.delete_all_leases_and_restart_workers(supervisor, "app_name", repo: Repo)
+      assert result == {:ok, "Shard leases deleted and workers restarted"}
+    end
+
+    test "returns an error if the supervisor is not found", _context do
+      result = Ecto.delete_all_leases_and_restart_workers(:non_existent_supervisor, "app_name", repo: Repo)
+      assert result == {:error, "Supervisor not running"}
+    end
+  end
 end
