@@ -63,4 +63,10 @@ defmodule KinesisClient.Stream.AppState.Adapter do
               opts :: keyword
             ) ::
               :ok | {:error, any}
+
+  @callback delete_all_leases_and_restart_workers(
+              supervisor :: Supervisor.t(),
+              app_name :: String.t(),
+              opts :: keyword
+            ) :: {:ok, any} | {:error, any}
 end

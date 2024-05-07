@@ -11,8 +11,13 @@ defmodule KinesisClient.Stream.AppState do
   Get a `KinesisClient.Stream.AppState.ShardInfo` struct by shard_id. If there is not an existing
   record, returns `:not_found`.
   """
-  def get_lease(app_name, stream_name, shard_id, opts \\ []),
-    do: adapter(opts).get_lease(app_name, stream_name, shard_id, opts)
+  def get_lease(app_name, stream_name, shard_id, opts \\ []) do
+    IO.inspect("app get_lease called")
+    IO.inspect("app_name: #{app_name}, stream_name: #{stream_name}, shard_id: #{shard_id}")
+    IO.puts("opts: #{inspect(opts)}")
+    IO.puts("adapter: #{inspect(adapter(opts))}")
+    adapter(opts).get_lease(app_name, stream_name, shard_id, opts)
+  end
 
   @doc """
   Persists a new ShardInfo record. Returns an error if there is already a record for that `shard_id`

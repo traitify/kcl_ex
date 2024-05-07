@@ -8,6 +8,8 @@ defmodule KinesisClient.Stream.AppState.Ecto do
   alias KinesisClient.Stream.AppState.Ecto.ShardLease
   alias KinesisClient.Stream.AppState.Ecto.ShardLeases
 
+  require Logger
+
   @migrations [
     {CreateShardLeaseTable.version(), CreateShardLeaseTable},
     {AddAppAndStreamNameColumns.version(), AddAppAndStreamNameColumns}
@@ -18,6 +20,28 @@ defmodule KinesisClient.Stream.AppState.Ecto do
     with {:ok, repo} <- get_repo(opts),
          :ok <- run_migrations(repo) do
       backfill_app_name_and_stream_name_columns(repo, app_name, opts)
+    end
+  end
+
+  @impl true
+  def delete_all_leases_and_restart_workers(supervisor, __app_name, opts) do
+    repo = Keyword.get(opts, :repo)
+
+    with supervisor when not is_nil(supervisor) <- Process.whereis(supervisor),
+         :ok <- repo.delete_all(ShardLease) do
+      Logger.info("Shard leases deleted")
+      Process.exit(supervisor, :shutdown)
+      Logger.info("Restarting workers")
+
+      {:ok, "Shard leases deleted and workers restarted"}
+    else
+      nil ->
+        Logger.info("Supervisor not running")
+        {:error, "Supervisor not running"}
+
+      _ ->
+        Logger.info("Failed to delete shard leases, reason unknown")
+        {:error, "Failed to delete shard leases, reason unknown"}
     end
   end
 
@@ -46,8 +70,14 @@ defmodule KinesisClient.Stream.AppState.Ecto do
 
   @impl true
   def get_lease(app_name, stream_name, shard_id, opts) do
+    IO.inspect("ecto get_lease called")
     repo = Keyword.get(opts, :repo)
+    IO.puts("repo: #{inspect(repo)}")
     shard_lease_params = %{shard_id: shard_id, app_name: app_name, stream_name: stream_name}
+    IO.puts("get_lease: params: #{inspect(shard_lease_params)}")
+
+    IO.puts("get_lease: get_shard_lease result")
+    IO.puts(inspect(ShardLeases.get_shard_lease(shard_lease_params, repo)))
 
     with {:ok, shard_lease} <- ShardLeases.get_shard_lease(shard_lease_params, repo) do
       shard_lease

@@ -33,4 +33,8 @@ defmodule KinesisClient.Ecto.Repo do
   def update(changeset, _opts) do
     {:error, changeset}
   end
+
+  def delete_all(_query, _opts \\ []) do
+    :ok
+  end
 end

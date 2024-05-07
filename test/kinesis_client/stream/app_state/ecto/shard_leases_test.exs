@@ -6,10 +6,14 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLeasesTest do
 
   test "get_shard_lease/2" do
     params = %{
-      shard_id: "a.b.c"
+      shard_id: "a.b.c",
+      app_name: "app_name",
+      stream_name: "stream_name"
     }
 
     {:ok, shard_lease} = ShardLeases.get_shard_lease(params, Repo)
+
+    IO.inspect(shard_lease)
 
     assert shard_lease.shard_id == "a.b.c"
     assert shard_lease.checkpoint == nil
@@ -34,7 +38,9 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLeasesTest do
         shard_id: "a.b.c",
         completed: false,
         lease_count: 1,
-        lease_owner: "test_owner"
+        lease_owner: "test_owner",
+        app_name: "test_app",
+        stream_name: "test_stream"
       }
 
       {:ok, shard_lease} = ShardLeases.insert_shard_lease(attrs, Repo)
@@ -51,7 +57,9 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLeasesTest do
         shard_id: "a.b.c",
         completed: false,
         lease_count: "INVALID",
-        lease_owner: "test_owner"
+        lease_owner: "test_owner",
+        app_name: "test_app",
+        stream_name: "test_stream"
       }
 
       {:error, changeset} = ShardLeases.insert_shard_lease(attrs, Repo)

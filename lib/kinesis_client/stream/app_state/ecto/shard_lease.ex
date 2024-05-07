@@ -6,6 +6,7 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLease do
   import Ecto.Query
 
   @fields [:shard_id, :app_name, :stream_name, :lease_owner, :lease_count, :checkpoint, :completed]
+  @required_fields [:shard_id, :app_name, :stream_name, :lease_owner]
 
   @primary_key {:shard_id, :string, autogenerate: false}
   schema "shard_lease" do
@@ -20,6 +21,7 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLease do
   def changeset(shard_lease, attrs) do
     shard_lease
     |> cast(attrs, @fields)
+    |> validate_required(@required_fields)
     |> unique_constraint(:shard_id, name: :shard_lease_pkey)
   end
 
@@ -32,6 +34,8 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLease do
   end
 
   defp query_by({:shard_id, shard_id}, query) do
+    IO.inspect("query_by shard_id: #{inspect(shard_id)}, query: #{inspect(query)}")
+
     where(query, [sl], sl.shard_id == ^shard_id)
   end
 
