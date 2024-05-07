@@ -14,8 +14,8 @@ defmodule KinesisClient.Stream.AppState do
   def get_lease(app_name, stream_name, shard_id, opts \\ []) do
     IO.inspect("app get_lease called")
     IO.inspect("app_name: #{app_name}, stream_name: #{stream_name}, shard_id: #{shard_id}")
-    IO.inspect("opts: #{opts}")
-    IO.inspect("adapter: #{adapter(opts)}")
+    IO.puts("opts: #{inspect(opts)}")
+    IO.puts("adapter: #{inspect(adapter(opts))}")
     adapter(opts).get_lease(app_name, stream_name, shard_id, opts)
   end
 
