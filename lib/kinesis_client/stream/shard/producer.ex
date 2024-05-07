@@ -164,6 +164,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
     :ok =
       AppState.update_checkpoint(
+        state.app_name,
         state.shard_id,
         state.stream_name,
         state.lease_owner,
