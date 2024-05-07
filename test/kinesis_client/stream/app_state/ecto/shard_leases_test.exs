@@ -6,10 +6,14 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLeasesTest do
 
   test "get_shard_lease/2" do
     params = %{
-      shard_id: "a.b.c"
+      shard_id: "a.b.c",
+      app_name: "app_name",
+      stream_name: "stream_name"
     }
 
     {:ok, shard_lease} = ShardLeases.get_shard_lease(params, Repo)
+
+    IO.inspect(shard_lease)
 
     assert shard_lease.shard_id == "a.b.c"
     assert shard_lease.checkpoint == nil

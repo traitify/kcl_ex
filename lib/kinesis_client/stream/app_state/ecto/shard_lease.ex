@@ -32,6 +32,8 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLease do
   end
 
   defp query_by({:shard_id, shard_id}, query) do
+    IO.inspect("query_by shard_id: #{inspect(shard_id)}, query: #{inspect(query)}")
+
     where(query, [sl], sl.shard_id == ^shard_id)
   end
 

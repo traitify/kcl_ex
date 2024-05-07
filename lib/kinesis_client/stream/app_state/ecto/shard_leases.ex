@@ -4,6 +4,13 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLeases do
 
   @spec get_shard_lease(map, Ecto.Repo.t()) :: {:error, :not_found} | {:ok, ShardLease.t()}
   def get_shard_lease(params, repo) do
+    IO.inspect("get_shard_lease: repo: #{inspect(repo)}")
+    IO.inspect("get_shard_lease: params: #{inspect(params)}")
+
+    IO.inspect(
+      "get_shard_lease: build_get_query #{inspect(ShardLease.build_get_query(ShardLease.query(), params))}"
+    )
+
     ShardLease.query()
     |> ShardLease.build_get_query(params)
     |> repo.one()

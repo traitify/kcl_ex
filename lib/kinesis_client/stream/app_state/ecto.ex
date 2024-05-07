@@ -72,9 +72,11 @@ defmodule KinesisClient.Stream.AppState.Ecto do
   def get_lease(app_name, stream_name, shard_id, opts) do
     IO.inspect("ecto get_lease called")
     repo = Keyword.get(opts, :repo)
-    IO.puts("adapter: #{inspect(repo)}")
+    IO.puts("repo: #{inspect(repo)}")
     shard_lease_params = %{shard_id: shard_id, app_name: app_name, stream_name: stream_name}
-    IO.puts("shard_lease_paramss")
+    IO.puts("get_lease: params: #{inspect(shard_lease_params)}")
+
+    IO.puts("get_lease: get_shard_lease result")
     IO.puts(inspect(ShardLeases.get_shard_lease(shard_lease_params, repo)))
 
     with {:ok, shard_lease} <- ShardLeases.get_shard_lease(shard_lease_params, repo) do
