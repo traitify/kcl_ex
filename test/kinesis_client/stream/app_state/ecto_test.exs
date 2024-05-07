@@ -5,7 +5,7 @@ defmodule KinesisClient.Stream.AppState.EctoTest do
   alias KinesisClient.Stream.AppState.Ecto
 
   test "creates a shard_lease" do
-    assert Ecto.create_lease("", "stream_name", "a.b.c", "test_owner", repo: Repo) == :ok
+    assert Ecto.create_lease("app_name", "stream_name", "a.b.c", "test_owner", repo: Repo) == :ok
   end
 
   test "gets a shard_lease" do
