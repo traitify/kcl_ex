@@ -1,5 +1,5 @@
 defmodule KinesisClient.Stream.AppState.Ecto.ShardLeases do
-
+  @moduledoc false
   alias KinesisClient.Stream.AppState.Ecto.ShardLease
 
   @spec get_shard_lease(map, Ecto.Repo.t()) :: {:error, :not_found} | {:ok, ShardLease.t()}

@@ -1,4 +1,5 @@
 defmodule TestSupervisor do
+  @moduledoc false
   use Supervisor
 
   def start_link(opts) do
@@ -9,7 +10,7 @@ defmodule TestSupervisor do
     children = [
       %{
         id: TestGenericWorker,
-        start: {TestGenericWorker, :start_link, [arg_value: "initial_value"]}, # pass initial configuration if necessary
+        start: {TestGenericWorker, :start_link, [arg_value: "initial_value"]},
         type: :worker,
         restart: :permanent
       }

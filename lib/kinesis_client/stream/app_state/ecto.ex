@@ -1,14 +1,14 @@
 defmodule KinesisClient.Stream.AppState.Ecto do
   @moduledoc false
 
-  require Logger
-
   @behaviour KinesisClient.Stream.AppState.Adapter
 
   alias KinesisClient.Stream.AppState.Ecto.AddAppAndStreamNameColumns
   alias KinesisClient.Stream.AppState.Ecto.CreateShardLeaseTable
   alias KinesisClient.Stream.AppState.Ecto.ShardLease
   alias KinesisClient.Stream.AppState.Ecto.ShardLeases
+
+  require Logger
 
   @migrations [
     {CreateShardLeaseTable.version(), CreateShardLeaseTable},
@@ -28,17 +28,20 @@ defmodule KinesisClient.Stream.AppState.Ecto do
     repo = Keyword.get(opts, :repo)
 
     with supervisor when not is_nil(supervisor) <- Process.whereis(supervisor),
-      :ok <- repo.delete_all(ShardLease) do
-
+         :ok <- repo.delete_all(ShardLease) do
       Logger.info("Shard leases deleted")
       Process.exit(supervisor, :shutdown)
       Logger.info("Restarting workers")
 
       {:ok, "Shard leases deleted and workers restarted"}
     else
-      Logger.info("Supervisor not running, failed to delete shard leases and restart workers")
+      nil ->
+        Logger.info("Supervisor not running")
+        {:error, "Supervisor not running"}
 
-      {:error, "Supervisor not running"}
+      _ ->
+        Logger.info("Failed to delete shard leases, reason unknown")
+        {:error, "Failed to delete shard leases, reason unknown"}
     end
   end
 

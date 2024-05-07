@@ -30,7 +30,6 @@ defmodule KinesisClient.Stream.AppState.DynamoTest do
     end
   end
 
-
   describe "delete_all_leases_and_restart_workers/2" do
     test "handles business", context do
       app_name = context[:app_name]
@@ -42,23 +41,24 @@ defmodule KinesisClient.Stream.AppState.DynamoTest do
       ]
 
       Enum.each(shard_leases, fn lease ->
-        Dynamo.put_item(app_name, lease) |> ExAws.request()
+        app_name |> Dynamo.put_item(lease) |> ExAws.request()
       end)
 
       shard_id = "shard12"
 
       case app_name
-      |> Dynamo.get_item(%{"shard_id" => shard_id})
-      |> ExAws.request() do
+           |> Dynamo.get_item(%{"shard_id" => shard_id})
+           |> ExAws.request() do
         {:ok, item} ->
           assert item["Item"]["shard_id"] == %{"S" => "shard12"}
       end
 
-      assert {:ok, "Shard leases deleted and workers restarted"} = AppState.delete_all_leases_and_restart_workers(supervisor, app_name, [])
+      assert {:ok, "Shard leases deleted and workers restarted"} =
+               AppState.delete_all_leases_and_restart_workers(supervisor, app_name, [])
 
       case app_name
-      |> Dynamo.get_item(%{"shard_id" => shard_id})
-      |> ExAws.request() do
+           |> Dynamo.get_item(%{"shard_id" => shard_id})
+           |> ExAws.request() do
         {:ok, item} ->
           assert item["Item"]["shard_id"] == nil
       end
@@ -68,15 +68,16 @@ defmodule KinesisClient.Stream.AppState.DynamoTest do
       app_name = "nope"
       supervisor = TestSupervisor
 
-      assert {:error,
-      {"ResourceNotFoundException", "Cannot do operations on a non-existent table"}} = AppState.delete_all_leases_and_restart_workers(supervisor, app_name, [])
+      assert {:error, {"ResourceNotFoundException", "Cannot do operations on a non-existent table"}} =
+               AppState.delete_all_leases_and_restart_workers(supervisor, app_name, [])
     end
 
     test "errors with invalid process", context do
       app_name = context[:app_name]
       supervisor = FakeProcess
 
-      assert {:error, "Supervisor not running"} = AppState.delete_all_leases_and_restart_workers(supervisor, app_name, [])
+      assert {:error, "Supervisor not running"} =
+               AppState.delete_all_leases_and_restart_workers(supervisor, app_name, [])
     end
   end
 

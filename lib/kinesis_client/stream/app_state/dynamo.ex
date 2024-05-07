@@ -22,11 +22,9 @@ defmodule KinesisClient.Stream.AppState.Dynamo do
          |> Dynamo.scan()
          |> ExAws.request() do
       {:ok, items} ->
-        items["Items"]
-        |> Enum.each(fn lease ->
+        Enum.each(items["Items"], fn lease ->
           cond do
             lease["shard_id"] ->
-
               app_name
               |> Dynamo.delete_item(%{"shard_id" => lease["shard_id"]["S"]})
               |> ExAws.request()
@@ -34,13 +32,16 @@ defmodule KinesisClient.Stream.AppState.Dynamo do
         end)
 
         case Process.whereis(supervisor) do
-          nil -> {:error, "Supervisor not running"}
+          nil ->
+            {:error, "Supervisor not running"}
+
           pid ->
             Process.exit(pid, :shutdown)
             {:ok, "Shard leases deleted and workers restarted"}
         end
 
-      {:error, error} -> {:error, error}
+      {:error, error} ->
+        {:error, error}
     end
   end
 
