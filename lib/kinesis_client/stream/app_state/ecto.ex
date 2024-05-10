@@ -25,6 +25,7 @@ defmodule KinesisClient.Stream.AppState.Ecto do
 
   @impl true
   def delete_all_leases_and_restart_workers(supervisor, __app_name, opts) do
+    Logger.info("Begin deleting shard leases #{inspect(opts)}, #{inspect(supervisor)}")
     repo = Keyword.get(opts, :repo)
 
     with supervisor when not is_nil(supervisor) <- Process.whereis(supervisor),
