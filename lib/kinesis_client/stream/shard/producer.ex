@@ -248,32 +248,43 @@ defmodule KinesisClient.Stream.Shard.Producer do
   end
 
   defp get_records(%__MODULE__{demand: demand, kinesis_opts: kinesis_opts} = state) do
-    {:ok,
-     %{
-       "NextShardIterator" => next_iterator,
-       "MillisBehindLatest" => _millis_behind_latest,
-       "Records" => records
-     }} = get_records_with_retry(state, Keyword.merge(kinesis_opts, limit: demand))
+    with {:ok, kinesis_records} <-
+           get_records_with_retry(state, Keyword.merge(kinesis_opts, limit: demand)),
+         {next_iterator, records} <- records_tuple(kinesis_records) do
+      new_demand = demand - length(records)
 
-    new_demand = demand - length(records)
+      messages = wrap_records(records)
 
-    messages = wrap_records(records)
+      poll_timer =
+        case {records, new_demand} do
+          {[], _} -> schedule_shard_poll(state.poll_interval)
+          {_, 0} -> nil
+          _ -> schedule_shard_poll(0)
+        end
 
-    poll_timer =
-      case {records, new_demand} do
-        {[], _} -> schedule_shard_poll(state.poll_interval)
-        {_, 0} -> nil
-        _ -> schedule_shard_poll(0)
-      end
+      new_state = %{
+        state
+        | demand: new_demand,
+          poll_timer: poll_timer,
+          shard_iterator: next_iterator
+      }
 
-    new_state = %{
-      state
-      | demand: new_demand,
-        poll_timer: poll_timer,
-        shard_iterator: next_iterator
-    }
+      {:noreply, messages, new_state}
+    else
+      _ -> {:noreply, [], state}
+    end
+  end
 
-    {:noreply, messages, new_state}
+  defp records_tuple(%{
+         "NextShardIterator" => next_iterator,
+         "MillisBehindLatest" => _millis_behind_latest,
+         "Records" => records
+       }) do
+    {next_iterator, records}
+  end
+
+  defp records_tuple(_) do
+    {nil, []}
   end
 
   @retry with: 500 |> exponential_backoff() |> Stream.take(5)
