@@ -70,7 +70,7 @@ defmodule KinesisClient.Stream do
       {Coordinator, coordinator_args}
     ]
 
-    Logger.debug(
+    Logger.info(
       "Starting KinesisClient.Stream: [app_name: #{app_name}, stream_name: {stream_name}]"
     )
 

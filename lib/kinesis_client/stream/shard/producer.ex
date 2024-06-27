@@ -29,6 +29,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
     :app_state_opts,
     :lease_owner,
     :shard_closed_timer,
+    :coordinator_name,
     shutdown_delay: 300_000,
     demand: 0
   ]
@@ -57,10 +58,11 @@ defmodule KinesisClient.Stream.Shard.Producer do
       app_state_opts: Keyword.get(opts, :app_state_opts, []),
       shard_iterator_type: Keyword.get(opts, :shard_iterator_type, :trim_horizon),
       poll_interval: Keyword.get(opts, :poll_interval, 5_000),
-      notify_pid: Keyword.get(opts, :notify_pid)
+      notify_pid: Keyword.get(opts, :notify_pid),
+      coordinator_name: opts[:coordinator_name]
     }
 
-    Logger.debug("Starting KinesisClient.Stream.Shard.Producer: #{inspect(state)}")
+    Logger.info("Starting KinesisClient.Stream.Shard.Producer: #{inspect(state)}")
     {:producer, state}
   end
 
@@ -110,7 +112,15 @@ defmodule KinesisClient.Stream.Shard.Producer do
     )
 
     timer = Process.send_after(self(), :shard_closed, state.shutdown_delay)
-    AppState.close_shard(state.app_name, state.stream_name, state.shard_id, state.app_state_opts)
+
+    AppState.close_shard(
+      state.app_name,
+      state.stream_name,
+      state.shard_id,
+      state.lease_owner,
+      state.app_state_opts
+    )
+
     :ok = Coordinator.close_shard(coordinator, shard_id)
     {:noreply, %{state | shard_closed_timer: timer}}
   end
@@ -248,43 +258,66 @@ defmodule KinesisClient.Stream.Shard.Producer do
   end
 
   defp get_records(%__MODULE__{demand: demand, kinesis_opts: kinesis_opts} = state) do
-    with {:ok, kinesis_records} <-
-           get_records_with_retry(state, Keyword.merge(kinesis_opts, limit: demand)),
-         {next_iterator, records} <- records_tuple(kinesis_records) do
-      new_demand = demand - length(records)
+    # {:ok,
+    #  %{
+    #    "NextShardIterator" => next_iterator,
+    #    "MillisBehindLatest" => _millis_behind_latest,
+    #    "Records" => records
+    #  }} = get_records_with_retry(state, Keyword.merge(kinesis_opts, limit: demand))
 
-      messages = wrap_records(records)
+    # new_demand = demand - length(records)
 
-      poll_timer =
-        case {records, new_demand} do
-          {[], _} -> schedule_shard_poll(state.poll_interval)
-          {_, 0} -> nil
-          _ -> schedule_shard_poll(0)
-        end
+    # messages = wrap_records(records)
 
-      new_state = %{
-        state
-        | demand: new_demand,
-          poll_timer: poll_timer,
-          shard_iterator: next_iterator
-      }
+    # poll_timer =
+    #   case {records, new_demand} do
+    #     {[], _} -> schedule_shard_poll(state.poll_interval)
+    #     {_, 0} -> nil
+    #     _ -> schedule_shard_poll(0)
+    #   end
 
-      {:noreply, messages, new_state}
-    else
-      _ -> {:noreply, [], state}
-    end
-  end
+    # new_state = %{
+    #   state
+    #   | demand: new_demand,
+    #     poll_timer: poll_timer,
+    #     shard_iterator: next_iterator
+    # }
 
-  defp records_tuple(%{
+    # {:noreply, messages, new_state}
+
+    case get_records_with_retry(state, Keyword.merge(kinesis_opts, limit: demand)) do
+      {:ok,
+       %{
          "NextShardIterator" => next_iterator,
          "MillisBehindLatest" => _millis_behind_latest,
          "Records" => records
-       }) do
-    {next_iterator, records}
-  end
+       }} ->
+        new_demand = demand - length(records)
 
-  defp records_tuple(_) do
-    {nil, []}
+        messages = wrap_records(records)
+
+        poll_timer =
+          case {records, new_demand} do
+            {[], _} -> schedule_shard_poll(state.poll_interval)
+            {_, 0} -> nil
+            _ -> schedule_shard_poll(0)
+          end
+
+        new_state = %{
+          state
+          | demand: new_demand,
+            poll_timer: poll_timer,
+            shard_iterator: next_iterator
+        }
+
+        {:noreply, messages, new_state}
+
+      {:ok, %{"ChildShards" => child_shards}} ->
+        Logger.info("Shard has child shards: #{inspect(child_shards)}")
+        # IO.inspect(state, label: "STATE")
+        Coordinator.close_shard(state.coordinator_name, state.shard_id)
+        {:noreply, [], state}
+    end
   end
 
   @retry with: 500 |> exponential_backoff() |> Stream.take(5)

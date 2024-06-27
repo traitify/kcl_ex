@@ -6,6 +6,8 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
 
   alias KinesisClient.Stream.Shard.Producer
 
+  require Logger
+
   def start_link(opts) do
     producer_opts = [
       app_name: opts[:app_name],
@@ -58,6 +60,8 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
     ]
 
     pipeline_opts = optional_kw(pipeline_opts, :partition_by, Keyword.get(opts, :partition_by))
+
+    Logger.info("Starting KinesisClient.Stream.Pipeline: #{inspect(pipeline_opts)}")
 
     Broadway.start_link(__MODULE__, pipeline_opts)
   end

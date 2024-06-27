@@ -62,7 +62,7 @@ defmodule KinesisClient.Stream.Coordinator do
       retry_timeout: Keyword.get(opts, :retry_timeout, 30_000)
     }
 
-    Logger.debug("Starting KinesisClient.Stream.Coordinates: #{inspect(state)}")
+    Logger.info("Starting KinesisClient.Stream.Coordinator: #{inspect(state)}")
     {:ok, state, {:continue, :initialize}}
   end
 
@@ -87,6 +87,18 @@ defmodule KinesisClient.Stream.Coordinator do
 
     Process.demonitor(ref, [:flush])
     Shard.stop(Shard.name(sn, shard_id))
+
+    shard_lease = get_lease(shard_id, state)
+
+    AppState.close_shard(
+      state.app_name,
+      sn,
+      shard_id,
+      shard_lease.lease_owner,
+      state.app_state_opts
+    )
+
+    describe_stream(state)
 
     {:noreply, state}
   end
@@ -173,62 +185,67 @@ defmodule KinesisClient.Stream.Coordinator do
   end
 
   defp start_shards(shard_graph, %__MODULE__{} = state) do
-    shard_r = list_relationships(shard_graph)
+    shard_graph
+    |> list_relationships()
+    |> tap(&Logger.info("(start_shards).shard_relationships: #{inspect(&1)}"))
+    |> Enum.reduce(state.shard_ref_map, fn {shard_id, parents}, acc ->
+      Logger.info("(start_shards).shard_id: #{inspect(shard_id)} and parents: #{inspect(parents)}")
 
-    Logger.debug("(start_shards).shard_r: #{inspect(shard_r)}")
-
-    Enum.reduce(shard_r, state.shard_ref_map, fn {shard_id, parents}, acc ->
-      Logger.debug("(start_shards).shard_id: #{inspect(shard_id)}")
-      Logger.debug("(start_shards).parents: #{inspect(parents)}")
-
-      shard_lease = get_lease(shard_id, state)
-
-      Logger.debug("(start_shards).shard_lease: #{inspect(shard_lease)}")
-
-      case parents do
-        [] ->
-          case shard_lease do
-            %{completed: true} ->
-              acc
-
-            _ ->
-              case start_shard(shard_id, state) do
-                {:ok, pid} -> Map.put(acc, Process.monitor(pid), shard_id)
-              end
-          end
-
-        # handle shard splits
-        [single_parent] ->
-          case get_lease(single_parent, state) do
-            %{completed: true} ->
-              Logger.info("Parent shard #{single_parent} is completed so starting #{shard_id}")
-
-              case start_shard(shard_id, state) do
-                {:ok, pid} -> Map.put(acc, Process.monitor(pid), shard_id)
-              end
-
-            %{completed: false} ->
-              Logger.info("Parent shard #{single_parent} is not completed so skipping #{shard_id}")
-              acc
-
-            :not_found ->
-              Logger.info("Parent shard #{single_parent} does not exist so skipping #{shard_id}")
-              acc
-          end
-
-        # handle shard merges
-        [parent1, parent2] ->
-          case {get_lease(parent1, state), get_lease(parent2, state)} do
-            {%{completed: true}, %{completed: true}} ->
-              case start_shard(shard_id, state) do
-                {:ok, pid} -> Map.put(acc, Process.monitor(pid), shard_id)
-              end
-
-            _ ->
-              acc
-          end
-      end
+      handle_shard_parents(parents, shard_id, state, acc)
     end)
+  end
+
+  # Handle shard with no parents
+  defp handle_shard_parents([], shard_id, state, acc) do
+    shard_id
+    |> get_lease(state)
+    |> process_shard(shard_id, state, acc)
+  end
+
+  # Handle shard splits
+  defp handle_shard_parents([single_parent_id], shard_id, state, acc) do
+    single_parent_id
+    |> get_lease(state)
+    |> case do
+      %{completed: true} ->
+        Logger.info("Parent shard #{single_parent_id} is completed so starting #{shard_id}")
+
+        shard_id
+        |> get_lease(state)
+        |> process_shard(shard_id, state, acc)
+
+      %{completed: false} ->
+        Logger.info("Parent shard #{single_parent_id} is not completed so skipping #{shard_id}")
+        acc
+
+      :not_found ->
+        Logger.info("Parent shard #{single_parent_id} does not exist so skipping #{shard_id}")
+        acc
+    end
+  end
+
+  # Handle shard merges
+  defp handle_shard_parents([parent1_id, parent2_id], shard_id, state, acc) do
+    case {get_lease(parent1_id, state), get_lease(parent2_id, state)} do
+      {%{completed: true}, %{completed: true}} ->
+        shard_id
+        |> get_lease(state)
+        |> process_shard(shard_id, state, acc)
+
+      _ ->
+        acc
+    end
+  end
+
+  defp process_shard(%{completed: true}, _shard_id, _state, acc) do
+    acc
+  end
+
+  defp process_shard(_, shard_id, state, acc) do
+    shard_id
+    |> tap(&Logger.info("Starting shard_id: #{inspect(&1)}"))
+    |> start_shard(state)
+    |> then(fn {:ok, pid} -> Map.put(acc, Process.monitor(pid), shard_id) end)
   end
 
   defp get_lease(shard_id, %{app_name: app_name, app_state_opts: app_state_opts} = state) do
