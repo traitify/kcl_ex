@@ -7,6 +7,8 @@ defmodule KinesisClient.Stream.Shard do
   alias KinesisClient.Stream.Shard.Lease
   alias KinesisClient.Stream.Shard.Pipeline
 
+  require Logger
+
   def start_link(args) do
     Supervisor.start_link(__MODULE__, args, name: args[:shard_name])
   end
@@ -42,6 +44,10 @@ defmodule KinesisClient.Stream.Shard do
       {Lease, lease_opts},
       {Pipeline, pipeline_opts}
     ]
+
+    Logger.info(
+      "Starting KinesisClient.Stream.Shard: lease_opts - #{inspect(lease_opts)} and pipleline_opts: #{inspect(pipeline_opts)}"
+    )
 
     Supervisor.init(children, strategy: :one_for_all)
   end
