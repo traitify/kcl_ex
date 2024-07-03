@@ -50,7 +50,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
     Process.send_after(self(), :take_or_renew_lease, state.renew_interval)
 
-    Logger.debug("Starting KinesisClient.Stream.Lease: #{inspect(state)}")
+    Logger.info("Starting KinesisClient.Stream.Lease: #{inspect(state)}")
 
     {:ok, state, {:continue, :initialize}}
   end
