@@ -110,7 +110,15 @@ defmodule KinesisClient.Stream.Shard.Producer do
     )
 
     timer = Process.send_after(self(), :shard_closed, state.shutdown_delay)
-    AppState.close_shard(state.app_name, state.stream_name, state.shard_id, state.app_state_opts)
+
+    AppState.close_shard(
+      state.app_name,
+      state.stream_name,
+      state.shard_id,
+      state.lease_owner,
+      state.app_state_opts
+    )
+
     :ok = Coordinator.close_shard(coordinator, shard_id)
     {:noreply, %{state | shard_closed_timer: timer}}
   end
