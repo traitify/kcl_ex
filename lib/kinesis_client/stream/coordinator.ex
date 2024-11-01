@@ -96,7 +96,7 @@ defmodule KinesisClient.Stream.Coordinator do
     AppState.initialize(state.app_name, opts)
   end
 
-  @spec remove_missing_parents(Map.t()) :: Map.t()
+  @spec remove_missing_parents(list()) :: list()
   def remove_missing_parents(shards) do
     Enum.map(shards, fn shard ->
       if Enum.any?(shards, fn %{"ShardId" => shard_id} -> shard_id == shard["ParentShardId"] end) do

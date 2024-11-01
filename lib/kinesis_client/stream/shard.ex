@@ -12,12 +12,17 @@ defmodule KinesisClient.Stream.Shard do
   end
 
   def init(opts) do
-    lease_opts = [
-      app_name: opts[:app_name],
-      stream_name: opts[:stream_name],
-      shard_id: opts[:shard_id],
-      lease_owner: opts[:lease_owner]
-    ]
+    lease_opts =
+      [
+        app_name: opts[:app_name],
+        stream_name: opts[:stream_name],
+        shard_id: opts[:shard_id],
+        lease_owner: opts[:lease_owner]
+      ]
+      |> optional_kw(:app_state_opts, Keyword.get(opts, :app_state_opts))
+      |> optional_kw(:renew_interval, Keyword.get(opts, :lease_renew_interval))
+      |> optional_kw(:lease_expiry, Keyword.get(opts, :lease_expiry))
+      |> optional_kw(:pipeline, Keyword.get(opts, :pipeline))
 
     pipeline_opts = [
       app_state_opts: opts[:app_state_opts],
@@ -30,13 +35,6 @@ defmodule KinesisClient.Stream.Shard do
       batchers: opts[:batchers],
       coordinator_name: opts[:coordinator_name]
     ]
-
-    lease_opts =
-      lease_opts
-      |> optional_kw(:app_state_opts, Keyword.get(opts, :app_state_opts))
-      |> optional_kw(:renew_interval, Keyword.get(opts, :lease_renew_interval))
-      |> optional_kw(:lease_expiry, Keyword.get(opts, :lease_expiry))
-      |> optional_kw(:pipeline, Keyword.get(opts, :pipeline))
 
     children = [
       {Lease, lease_opts},
