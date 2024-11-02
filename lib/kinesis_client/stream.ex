@@ -23,7 +23,7 @@ defmodule KinesisClient.Stream do
     * `:shard_supervisor` - The child_spec for the Supervisor that monitors the ProcessingPipelines.
       Must implement the DynamicSupervisor behaviour.
     * `:lease_renew_interval`(optional) - How long (in milliseconds) a lease will be held before a renewal is attempted.
-    * `:lease_expiry`(optional) - The lenght of time in milliseconds that least lasts for. If a
+    * `:lease_expiry`(optional) - The length of time in milliseconds that least lasts for. If a
       lease is not renewed within this time frame, then that lease is considered expired and can be
       taken by another process.
   """
@@ -39,18 +39,16 @@ defmodule KinesisClient.Stream do
     coordinator_name = get_coordinator_name(opts)
     shard_consumer = get_shard_consumer(opts)
 
-    shard_args = [
-      app_name: opts[:app_name],
-      coordinator_name: coordinator_name,
-      stream_name: stream_name,
-      lease_owner: worker_ref,
-      shard_consumer: shard_consumer,
-      processors: opts[:processors],
-      batchers: opts[:batchers]
-    ]
-
     shard_args =
-      shard_args
+      [
+        app_name: opts[:app_name],
+        coordinator_name: coordinator_name,
+        stream_name: stream_name,
+        lease_owner: worker_ref,
+        shard_consumer: shard_consumer,
+        processors: opts[:processors],
+        batchers: opts[:batchers]
+      ]
       |> optional_kw(:app_state_opts, Keyword.get(opts, :app_state_opts))
       |> optional_kw(:lease_renew_interval, Keyword.get(opts, :lease_renew_interval))
       |> optional_kw(:lease_expiry, Keyword.get(opts, :lease_expiry))
@@ -71,7 +69,7 @@ defmodule KinesisClient.Stream do
     ]
 
     Logger.debug(
-      "Starting KinesisClient.Stream: [app_name: #{app_name}, stream_name: {stream_name}]"
+      "Starting KinesisClient.Stream: [app_name: #{app_name}, stream_name: #{stream_name}]"
     )
 
     Supervisor.init(children, strategy: :one_for_all)
