@@ -271,6 +271,13 @@ defmodule KinesisClient.Stream.Shard.Producer do
   @retry with: 500 |> exponential_backoff() |> Stream.take(5)
   defp get_records_with_retry(state, kinesis_opts) do
     Kinesis.get_records(state.shard_iterator, kinesis_opts)
+    |> tap(fn
+      {:ok, %{"Records" => []}} ->
+        :telemetry.execute([:kinesis_client, :get_records], %{total: 0})
+
+      {:ok, %{"Records" => records}} ->
+        :telemetry.execute([:kinesis_client, :get_records], %{total: length(records)})
+    end)
   end
 
   defp maybe_end_of_shard_reached({:ok, %{"ChildShards" => _child_shards}}, state) do

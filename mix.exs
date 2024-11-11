@@ -49,7 +49,7 @@ defmodule KinesisClient.Mixfile do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:broadway, "~> 1.0"},
+      {:broadway, "~> 1.1.0"},
       {:configparser_ex, "~> 4.0"},
       {:credo, "~> 1.0", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.0", only: [:dev], runtime: false},
