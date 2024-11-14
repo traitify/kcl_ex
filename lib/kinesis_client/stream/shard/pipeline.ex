@@ -6,8 +6,6 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
 
   alias KinesisClient.Stream.Shard.Producer
 
-  require Logger
-
   def start_link(opts) do
     producer_opts = [
       app_name: opts[:app_name],
@@ -79,11 +77,8 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
       end)
 
     case errors do
-      [] ->
-        :ok
-
-      errors ->
-        errors |> tap(fn error -> Logger.error("Error starting producer: #{inspect(error)}") end)
+      [] -> :ok
+      errors -> errors
     end
   end
 
