@@ -37,8 +37,8 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLeases do
     )
     |> repo.update_all([])
     |> case do
-      {1, shard_lease} -> {:ok, shard_lease}
-      {0, _} -> {:error, :update_unsuccessful}
+      {1, [shard_lease]} -> {:ok, shard_lease}
+      {_, _} -> {:error, :update_unsuccessful}
     end
   end
 end
