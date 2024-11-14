@@ -62,7 +62,7 @@ defmodule KinesisClient.Stream.Coordinator do
       retry_timeout: Keyword.get(opts, :retry_timeout, 30_000)
     }
 
-    Logger.info("Starting KinesisClient.Stream.Coordinator: #{inspect(state)}")
+    Logger.info("Initializing KinesisClient.Stream.Coordinator: #{inspect(state)}")
     {:ok, state, {:continue, :initialize}}
   end
 
@@ -131,8 +131,8 @@ defmodule KinesisClient.Stream.Coordinator do
 
         state = %{state | shard_map: shard_map}
 
-        Logger.info("(describe_stream).shard_graph: #{inspect(shard_graph)}")
-        Logger.info("(describe_stream).state: #{inspect(state)}")
+        Logger.debug("(describe_stream).shard_graph: #{inspect(shard_graph)}")
+        Logger.debug("(describe_stream).state: #{inspect(state)}")
 
         map = start_shards(shard_graph, state)
 
@@ -180,15 +180,15 @@ defmodule KinesisClient.Stream.Coordinator do
   defp start_shards(shard_graph, %__MODULE__{} = state) do
     shard_r = list_relationships(shard_graph)
 
-    Logger.info("(start_shards).shard_r: #{inspect(shard_r)}")
+    Logger.debug("(start_shards).shard_r: #{inspect(shard_r)}")
 
     Enum.reduce(shard_r, state.shard_ref_map, fn {shard_id, parents}, acc ->
-      Logger.info("(start_shards).shard_id: #{inspect(shard_id)}")
-      Logger.info("(start_shards).parents: #{inspect(parents)}")
+      Logger.debug("(start_shards).shard_id: #{inspect(shard_id)}")
+      Logger.debug("(start_shards).parents: #{inspect(parents)}")
 
       shard_lease = get_lease(shard_id, state)
 
-      Logger.info("(start_shards).shard_lease: #{inspect(shard_lease)}")
+      Logger.debug("(start_shards).shard_lease: #{inspect(shard_lease)}")
 
       case parents do
         [] ->
