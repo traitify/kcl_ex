@@ -62,7 +62,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
       coordinator_name: opts[:coordinator_name]
     }
 
-    Logger.info("Starting KinesisClient.Stream.Shard.Producer: #{inspect(state)}")
+    Logger.info("Initializing KinesisClient.Stream.Shard.Producer: #{inspect(state)}")
     {:producer, state}
   end
 
@@ -207,6 +207,8 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @impl GenStage
   def handle_call(:start, from, state) do
+    Logger.info("Starting KinesisClient.Stream.Shard.Producer: #{inspect(state)}")
+
     {:noreply, records, new_state} =
       case AppState.get_lease(
              state.app_name,
