@@ -275,10 +275,13 @@ defmodule KinesisClient.Stream.Shard.Producer do
     Kinesis.get_records(state.shard_iterator, kinesis_opts)
   end
 
-  defp maybe_end_of_shard_reached({:ok, %{"ChildShards" => _child_shards}}, state) do
+  defp maybe_end_of_shard_reached(
+         {:ok, %{"ChildShards" => _child_shards, "Records" => records}},
+         state
+       ) do
     state = handle_closed_shard(%{state | status: :closed})
 
-    {:noreply, [], state}
+    {:noreply, wrap_records(records), state}
   end
 
   defp maybe_end_of_shard_reached(
@@ -346,6 +349,8 @@ defmodule KinesisClient.Stream.Shard.Producer do
   end
 
   # convert Kinesis records to Broadway messages
+  defp wrap_records([]), do: []
+
   defp wrap_records(records) do
     ref = make_ref()
 
