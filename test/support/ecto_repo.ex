@@ -14,6 +14,22 @@ defmodule KinesisClient.Ecto.Repo do
     }
   end
 
+  def completed() do
+    %ShardLease{
+      shard_id: "a.b.c",
+      app_name: "app_name",
+      stream_name: "stream_name",
+      checkpoint: nil,
+      completed: true,
+      lease_count: 1,
+      lease_owner: "test_owner"
+    }
+  end
+
+  def all(query) do
+    [one(query)]
+  end
+
   def insert(changeset, opts \\ [])
 
   def insert(%Changeset{errors: [], changes: values}, _opts) do
@@ -32,5 +48,9 @@ defmodule KinesisClient.Ecto.Repo do
 
   def update(changeset, _opts) do
     {:error, changeset}
+  end
+
+  def update_all(_query, []) do
+    {1, [completed()]}
   end
 end
