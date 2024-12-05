@@ -42,20 +42,34 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLeases do
 
   @spec update_shard_lease(ShardLease.t(), Ecto.Repo.t(), list) ::
           {:error, :update_unsuccessful} | {:ok, ShardLease.t()}
-  def update_shard_lease(shard_lease, repo, change \\ []) do
-    from(sl in ShardLease,
-      where:
-        sl.shard_id == ^shard_lease.shard_id and
-          sl.app_name == ^shard_lease.app_name and
-          sl.stream_name == ^shard_lease.stream_name and
-          sl.lease_count == ^shard_lease.lease_count,
-      select: sl,
-      update: [set: ^change]
-    )
+  def update_shard_lease(shard_lease, repo, change) do
+    ShardLease
+    |> build_where_clause(shard_lease)
+    |> maybe_take_lease(change)
+    |> select([sl], sl)
+    |> update([sl], set: ^change)
     |> repo.update_all([])
     |> case do
       {1, [shard_lease]} -> {:ok, shard_lease}
       {_, _} -> {:error, :update_unsuccessful}
     end
   end
+
+  defp build_where_clause(query, shard_lease) do
+    query
+    |> where(
+      [sl],
+      sl.shard_id == ^shard_lease.shard_id and
+        sl.app_name == ^shard_lease.app_name and
+        sl.stream_name == ^shard_lease.stream_name and
+        sl.lease_count == ^shard_lease.lease_count
+    )
+  end
+
+  defp maybe_take_lease(query, lease_owner: new_lease_owner) do
+    query
+    |> where([sl], sl.lease_owner != ^new_lease_owner)
+  end
+
+  defp maybe_take_lease(query, _), do: query
 end
