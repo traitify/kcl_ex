@@ -20,18 +20,6 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLeases do
 
   def get_shard_lease(_params, _repo), do: {:error, :missing_required_fields}
 
-  @spec get_shard_lease_by_id(String.t(), Ecto.Repo.t()) ::
-          {:error, :not_found} | {:ok, list(ShardLease.t())}
-  def get_shard_lease_by_id(shard_id, repo) do
-    ShardLease.query()
-    |> ShardLease.build_get_query(%{shard_id: shard_id})
-    |> repo.all()
-    |> case do
-      [] -> {:error, :not_found}
-      shard_leases -> {:ok, shard_leases}
-    end
-  end
-
   @spec insert_shard_lease(map, Ecto.Repo.t()) ::
           {:error, Ecto.Changeset.t()} | {:ok, ShardLease.t()}
   def insert_shard_lease(attrs, repo) do

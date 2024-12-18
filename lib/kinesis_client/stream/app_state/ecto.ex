@@ -3,6 +3,7 @@ defmodule KinesisClient.Stream.AppState.Ecto do
 
   @behaviour KinesisClient.Stream.AppState.Adapter
 
+  alias KinesisClient.Stream.AppState.Ecto.AddAdditionalUniqueConstraints
   alias KinesisClient.Stream.AppState.Ecto.AddAppAndStreamNameColumns
   alias KinesisClient.Stream.AppState.Ecto.CreateShardLeaseTable
   alias KinesisClient.Stream.AppState.Ecto.ShardLease
@@ -10,7 +11,8 @@ defmodule KinesisClient.Stream.AppState.Ecto do
 
   @migrations [
     {CreateShardLeaseTable.version(), CreateShardLeaseTable},
-    {AddAppAndStreamNameColumns.version(), AddAppAndStreamNameColumns}
+    {AddAppAndStreamNameColumns.version(), AddAppAndStreamNameColumns},
+    {AddAdditionalUniqueConstraints.version(), AddAdditionalUniqueConstraints}
   ]
 
   @impl true
