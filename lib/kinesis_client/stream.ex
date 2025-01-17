@@ -68,8 +68,8 @@ defmodule KinesisClient.Stream do
       {Coordinator, coordinator_args}
     ]
 
-    Logger.debug(
-      "Starting KinesisClient.Stream: [app_name: #{app_name}, stream_name: #{stream_name}]"
+    Logger.info(
+      "Initializing KinesisClient.Stream: [app_name: #{app_name}, stream_name: #{stream_name}]"
     )
 
     Supervisor.init(children, strategy: :one_for_all)
