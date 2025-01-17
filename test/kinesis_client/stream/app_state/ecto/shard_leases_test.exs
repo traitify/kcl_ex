@@ -2,24 +2,17 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLeasesTest do
   use ExUnit.Case
 
   alias KinesisClient.Ecto.Repo
+  alias KinesisClient.Stream.AppState.Ecto.ShardLease
   alias KinesisClient.Stream.AppState.Ecto.ShardLeases
 
   test "get_shard_lease/2" do
     params = %{
-      shard_id: "a.b.c"
+      shard_id: "a.b.c",
+      app_name: "app_name",
+      stream_name: "stream_name"
     }
 
     {:ok, shard_lease} = ShardLeases.get_shard_lease(params, Repo)
-
-    assert shard_lease.shard_id == "a.b.c"
-    assert shard_lease.checkpoint == nil
-    assert shard_lease.completed == false
-    assert shard_lease.lease_count == 1
-    assert shard_lease.lease_owner == "test_owner"
-  end
-
-  test "get_shard_lease_by_id/2" do
-    {:ok, shard_lease} = ShardLeases.get_shard_lease_by_id("a.b.c", Repo)
 
     assert shard_lease.shard_id == "a.b.c"
     assert shard_lease.checkpoint == nil
@@ -62,12 +55,22 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLeasesTest do
   end
 
   test "update_shard_lease/3" do
-    {:ok, shard_lease} = ShardLeases.get_shard_lease_by_id("a.b.c", Repo)
+    {:ok, [shard_lease]} = get_shard_lease_by_id("a.b.c", Repo)
 
     assert shard_lease.completed == false
 
     {:ok, updated_shard_lease} = ShardLeases.update_shard_lease(shard_lease, Repo, completed: true)
 
     assert updated_shard_lease.completed == true
+  end
+
+  defp get_shard_lease_by_id(shard_id, repo) do
+    ShardLease.query()
+    |> ShardLease.build_get_query(%{shard_id: shard_id})
+    |> repo.all()
+    |> case do
+      [] -> {:error, :not_found}
+      shard_leases -> {:ok, shard_leases}
+    end
   end
 end

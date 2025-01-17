@@ -20,7 +20,7 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLease do
   def changeset(shard_lease, attrs) do
     shard_lease
     |> cast(attrs, @fields)
-    |> unique_constraint(:shard_id, name: :shard_lease_pkey)
+    |> unique_constraint([:shard_id, :app_name, :stream_name], name: :shard_lease_pkey)
   end
 
   def query do
