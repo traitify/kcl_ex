@@ -86,6 +86,7 @@ defmodule KinesisClient.Stream.Coordinator do
     {ref, _} = Enum.find(shards, fn {_monitor_ref, in_shard_id} -> in_shard_id == shard_id end)
 
     Process.demonitor(ref, [:flush])
+    Logger.info("Stopping shard: #{shard_id}")
     Shard.stop(Shard.name(sn, shard_id))
 
     describe_stream(state)
