@@ -26,7 +26,7 @@ opts = [
   stream_name: "kcl-ex-test-stream",
   app_name: "my-test-app",
   shard_consumer: MyShardConsumer,
-  app_state_opts: [adapter: :ecto, repo: AssessmentService.Repo],
+  app_state_opts: [adapter: :ecto, repo: AssessmentService.Repo], # Or [adapter: :dynamo] or just []
   processors: [
     default: [
       concurrency: 1,
