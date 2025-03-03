@@ -50,7 +50,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
     Process.send_after(self(), :take_or_renew_lease, state.renew_interval)
 
-    Logger.debug("Starting KinesisClient.Stream.Lease: #{inspect(state)}")
+    Logger.info("Initializing KinesisClient.Stream.Lease: #{inspect(state)}")
 
     {:ok, state, {:continue, :initialize}}
   end
@@ -114,7 +114,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
             %{state | lease_holder: false}
           end
 
-        Logger.debug(
+        Logger.info(
           "Lease is owned by another node, and could not be taken: [shard_id: #{state.shard_id}, " <>
             "lease_owner: #{state.lease_owner}, lease_count: #{state.lease_count}]"
         )
@@ -152,7 +152,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
   defp renew_lease(shard_lease, %{app_state_opts: opts, app_name: app_name} = state) do
     expected = shard_lease.lease_count + 1
 
-    Logger.debug(
+    Logger.info(
       "Renewing lease: [app_name: #{app_name}, shard_id: #{state.shard_id}, lease_owner: " <>
         "#{state.lease_owner}]"
     )
@@ -164,7 +164,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
         state
 
       :lease_renew_failed ->
-        Logger.debug(
+        Logger.error(
           "Failed to renew lease, stopping producer: [app_name: #{app_name}, " <>
             "shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}]"
         )
@@ -181,7 +181,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
   defp take_lease(_shard_lease, %{app_state_opts: opts, app_name: app_name} = state) do
     expected = state.lease_count + 1
 
-    Logger.debug(
+    Logger.info(
       "Attempting to take lease: [lease_owner: #{state.lease_owner}, shard_id: #{state.shard_id}]"
     )
 
