@@ -62,7 +62,7 @@ defmodule KinesisClient.Stream.Coordinator do
       retry_timeout: Keyword.get(opts, :retry_timeout, 30_000)
     }
 
-    Logger.debug("Starting KinesisClient.Stream.Coordinates: #{inspect(state)}")
+    Logger.info("Initializing KinesisClient.Stream.Coordinator: #{inspect(state)}")
     {:ok, state, {:continue, :initialize}}
   end
 
@@ -86,8 +86,14 @@ defmodule KinesisClient.Stream.Coordinator do
     {ref, _} = Enum.find(shards, fn {_monitor_ref, in_shard_id} -> in_shard_id == shard_id end)
 
     Process.demonitor(ref, [:flush])
+    Logger.info("Stopping shard: #{shard_id}")
     Shard.stop(Shard.name(sn, shard_id))
 
+    describe_stream(state)
+  end
+
+  @impl GenServer
+  def handle_info({:DOWN, _, _, _, _}, state) do
     {:noreply, state}
   end
 
@@ -203,7 +209,10 @@ defmodule KinesisClient.Stream.Coordinator do
             %{completed: true} ->
               Logger.info("Parent shard #{single_parent} is completed so starting #{shard_id}")
 
-              case start_shard(shard_id, state) do
+              shard_id
+              |> maybe_start_shard(state, get_lease(shard_id, state))
+              |> case do
+                :ok -> acc
                 {:ok, pid} -> Map.put(acc, Process.monitor(pid), shard_id)
               end
 
@@ -235,12 +244,17 @@ defmodule KinesisClient.Stream.Coordinator do
     AppState.get_lease(app_name, state.stream_name, shard_id, app_state_opts)
   end
 
+  defp maybe_start_shard(shard_id, _state, %{completed: true}) do
+    Logger.info("Skipping shard #{shard_id} because it is already completed")
+    :ok
+  end
+
+  defp maybe_start_shard(shard_id, state, _shard_lease) do
+    start_shard(shard_id, state)
+  end
+
   # Start a shard and return an updated worker map with the %{lease_ref => pid}
-  @spec start_shard(
-          shard_id :: String.t(),
-          state :: map
-        ) ::
-          {:ok, pid}
+  @spec start_shard(shard_id :: String.t(), state :: map) :: {:ok, pid}
   defp start_shard(
          shard_id,
          %{shard_supervisor_name: shard_supervisor, shard_args: shard_args} = state
@@ -248,14 +262,18 @@ defmodule KinesisClient.Stream.Coordinator do
     shard_args =
       shard_args
       |> Keyword.put(:shard_id, shard_id)
-      |> Keyword.put(
-        :shard_name,
-        Shard.name(state.stream_name, shard_id)
-      )
+      |> Keyword.put(:shard_name, Shard.name(state.stream_name, shard_id))
 
-    {:ok, pid} = Shard.start(shard_supervisor, shard_args)
-    notify({:shard_started, %{pid: pid, shard_id: shard_id}}, state)
-    {:ok, pid}
+    shard_supervisor
+    |> Shard.start(shard_args)
+    |> case do
+      {:ok, pid} ->
+        notify({:shard_started, %{pid: pid, shard_id: shard_id}}, state)
+        {:ok, pid}
+
+      {:error, {_, pid}} ->
+        {:ok, pid}
+    end
   end
 
   ##
