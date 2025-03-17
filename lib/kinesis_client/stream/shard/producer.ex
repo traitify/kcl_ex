@@ -136,7 +136,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
   end
 
   @impl GenStage
-  def handle_info({:ack, _ref, successful_msgs, []}, state) do
+  def handle_info({:ack, _ref, successful_msgs, failed_msgs}, state) do
     %{metadata: %{"SequenceNumber" => checkpoint}} = successful_msgs |> Enum.reverse() |> hd()
 
     :ok =
@@ -152,59 +152,11 @@ defmodule KinesisClient.Stream.Shard.Producer do
     notify({:acked, %{checkpoint: checkpoint, success: successful_msgs, failed: []}}, state)
 
     Logger.info(
-      "Acknowledged #{length(successful_msgs)} messages: [app_name: #{state.app_name} " <>
-        "shard_id: #{state.shard_id} data: #{inspect(successful_msgs)}"
+      "Acknowledged #{length(successful_msgs)} successful and #{length(successful_msgs)} failed messages: " <>
+        "[app_name: #{state.app_name} shard_id: #{state.shard_id} data: #{inspect(successful_msgs)}"
     )
 
     {:noreply, [], state}
-  end
-
-  @impl GenStage
-  def handle_info({:ack, _ref, [], failed_msgs}, state) do
-    Logger.info("Retrying #{length(failed_msgs)} failed messages")
-
-    state =
-      case state.shard_closed_timer do
-        nil ->
-          state
-
-        timer ->
-          Process.cancel_timer(timer)
-          %{state | shard_closed_timer: nil, status: :started}
-      end
-
-    {:noreply, failed_msgs, state}
-  end
-
-  @impl GenStage
-  def handle_info({:ack, _ref, successful_msgs, failed_msgs}, state) do
-    %{metadata: %{"SequenceNumber" => checkpoint}} = successful_msgs |> Enum.reverse() |> hd()
-
-    :ok =
-      AppState.update_checkpoint(
-        state.app_name,
-        state.stream_name,
-        state.shard_id,
-        state.lease_owner,
-        checkpoint,
-        state.app_state_opts
-      )
-
-    Logger.info(
-      "Acknowledged #{length(successful_msgs)} messages, Retrying #{length(failed_msgs)} failed messages"
-    )
-
-    state =
-      case state.shard_closed_timer do
-        nil ->
-          state
-
-        timer ->
-          Process.cancel_timer(timer)
-          %{state | shard_closed_timer: nil, status: :started}
-      end
-
-    {:noreply, failed_msgs, state}
   end
 
   @impl GenStage
