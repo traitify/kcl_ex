@@ -11,6 +11,8 @@ defmodule KinesisClient.Stream.Shard.Producer do
   alias KinesisClient.Stream.AppState
   alias KinesisClient.Stream.Coordinator
 
+  @kinesis_records_limit 10_000
+
   require Logger
 
   defstruct [
@@ -233,9 +235,12 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   defp get_records(%__MODULE__{demand: demand, kinesis_opts: kinesis_opts} = state) do
     state
-    |> get_records_with_retry(Keyword.merge(kinesis_opts, limit: demand))
+    |> get_records_with_retry(Keyword.merge(kinesis_opts, limit: check_kinesis_limit(demand)))
     |> maybe_end_of_shard_reached(state)
   end
+
+  defp check_kinesis_limit(demand) when demand <= @kinesis_records_limit, do: demand
+  defp check_kinesis_limit(_demand), do: @kinesis_records_limit
 
   @retry with: 500 |> exponential_backoff() |> Stream.take(5)
   defp get_records_with_retry(state, kinesis_opts) do
