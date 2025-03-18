@@ -12,7 +12,7 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
     |> expect(:get_shard_iterator, fn _, _, _, _ ->
       {:ok, %{"ShardIterator" => "somesharditerator"}}
     end)
-    |> expect(:get_records, 2, fn _, _ ->
+    |> expect(:get_records, fn _, _ ->
       records = [
         %{"Data" => "foo", "SequenceNumber" => "12345"}
       ]
@@ -46,7 +46,7 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
     |> expect(:get_shard_iterator, fn _, _, _, _ ->
       {:ok, %{"ShardIterator" => "somesharditerator"}}
     end)
-    |> expect(:get_records, 2, fn _, opts ->
+    |> expect(:get_records, fn _, opts ->
       count = opts[:limit] - 5
       records = Enum.map(0..count, fn _ -> %{"Data" => "foo", "SequenceNumber" => "12345"} end)
 
@@ -67,7 +67,7 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
     |> expect(:get_shard_iterator, fn _, _, _, _ ->
       {:ok, %{"ShardIterator" => "somesharditerator"}}
     end)
-    |> expect(:get_records, 2, fn _, opts ->
+    |> expect(:get_records, fn _, opts ->
       count = opts[:limit] - 5
       records = Enum.map(0..count, fn _ -> %{"Data" => "foo", "SequenceNumber" => "12345"} end)
 
