@@ -96,6 +96,15 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
     assert_receive {:acked, %{success: _successful, checkpoint: "12345", failed: []}}, 10_000
   end
 
+  test "demand_limit is set correctly in the state when initializing" do
+    opts = producer_opts(kinesis_opts: [limit: 1000])
+
+    {:ok, _producer} = start_supervised({Producer, opts})
+
+    assert_receive {:init, state}, 1_000
+    assert state.demand_limit == 1000
+  end
+
   defp producer_opts(overrides \\ []) do
     opts = [
       app_name: "foo",

@@ -66,7 +66,10 @@ defmodule KinesisClient.Stream.Shard.Producer do
       demand_limit: set_demand_limit(opts[:kinesis_opts])
     }
 
+    notify({:init, state}, state)
+
     Logger.info("Initializing KinesisClient.Stream.Shard.Producer: #{inspect(state)}")
+
     {:producer, state}
   end
 
@@ -160,12 +163,19 @@ defmodule KinesisClient.Stream.Shard.Producer do
         "shard_id: #{state.shard_id} data: #{inspect(successful_msgs)}"
     )
 
+    state =
+      state.status
+      |> case do
+        :closed -> if state.shard_closed_timer, do: state, else: handle_closed_shard(state)
+        _ -> state
+      end
+
     {:noreply, [], state}
   end
 
   @impl GenStage
   def handle_info({:ack, _ref, [], failed_msgs}, state) do
-    Logger.info("Retrying #{length(failed_msgs)} failed messages")
+    Logger.info("Shard #{state.shard_id} - Retrying #{length(failed_msgs)} failed messages")
 
     state =
       case state.shard_closed_timer do
@@ -183,7 +193,8 @@ defmodule KinesisClient.Stream.Shard.Producer do
   @impl GenStage
   def handle_info({:ack, _ref, successful_msgs, failed_msgs}, state) do
     Logger.info(
-      "Acknowledged #{length(successful_msgs)} messages, Retrying #{length(failed_msgs)} failed messages"
+      "Shard #{state.shard_id} - Acknowledged #{length(successful_msgs)} messages, " <>
+        "Retrying #{length(failed_msgs)} failed messages"
     )
 
     state =
