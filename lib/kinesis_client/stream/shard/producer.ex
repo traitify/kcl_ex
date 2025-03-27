@@ -11,6 +11,8 @@ defmodule KinesisClient.Stream.Shard.Producer do
   alias KinesisClient.Stream.AppState
   alias KinesisClient.Stream.Coordinator
 
+  @default_records_limit 500
+
   require Logger
 
   defstruct [
@@ -30,6 +32,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
     :lease_owner,
     :shard_closed_timer,
     :coordinator_name,
+    :demand_limit,
     shutdown_delay: 300_000,
     demand: 0
   ]
@@ -59,10 +62,14 @@ defmodule KinesisClient.Stream.Shard.Producer do
       shard_iterator_type: Keyword.get(opts, :shard_iterator_type, :trim_horizon),
       poll_interval: Keyword.get(opts, :poll_interval, 5_000),
       notify_pid: Keyword.get(opts, :notify_pid),
-      coordinator_name: opts[:coordinator_name]
+      coordinator_name: opts[:coordinator_name],
+      demand_limit: set_demand_limit(opts[:kinesis_opts])
     }
 
+    notify({:init, state}, state)
+
     Logger.info("Initializing KinesisClient.Stream.Shard.Producer: #{inspect(state)}")
+
     {:producer, state}
   end
 
@@ -156,12 +163,19 @@ defmodule KinesisClient.Stream.Shard.Producer do
         "shard_id: #{state.shard_id} data: #{inspect(successful_msgs)}"
     )
 
+    state =
+      state.status
+      |> case do
+        :closed -> if state.shard_closed_timer, do: state, else: handle_closed_shard(state)
+        _ -> state
+      end
+
     {:noreply, [], state}
   end
 
   @impl GenStage
   def handle_info({:ack, _ref, [], failed_msgs}, state) do
-    Logger.info("Retrying #{length(failed_msgs)} failed messages")
+    Logger.info("Shard #{state.shard_id} - Retrying #{length(failed_msgs)} failed messages")
 
     state =
       case state.shard_closed_timer do
@@ -170,7 +184,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
         timer ->
           Process.cancel_timer(timer)
-          %{state | shard_closed_timer: nil, status: :started}
+          %{state | shard_closed_timer: nil}
       end
 
     {:noreply, failed_msgs, state}
@@ -178,20 +192,9 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @impl GenStage
   def handle_info({:ack, _ref, successful_msgs, failed_msgs}, state) do
-    %{metadata: %{"SequenceNumber" => checkpoint}} = successful_msgs |> Enum.reverse() |> hd()
-
-    :ok =
-      AppState.update_checkpoint(
-        state.app_name,
-        state.stream_name,
-        state.shard_id,
-        state.lease_owner,
-        checkpoint,
-        state.app_state_opts
-      )
-
     Logger.info(
-      "Acknowledged #{length(successful_msgs)} messages, Retrying #{length(failed_msgs)} failed messages"
+      "Shard #{state.shard_id} - Acknowledged #{length(successful_msgs)} messages, " <>
+        "Retrying #{length(failed_msgs)} failed messages"
     )
 
     state =
@@ -201,7 +204,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
         timer ->
           Process.cancel_timer(timer)
-          %{state | shard_closed_timer: nil, status: :started}
+          %{state | shard_closed_timer: nil}
       end
 
     {:noreply, failed_msgs, state}
@@ -279,11 +282,16 @@ defmodule KinesisClient.Stream.Shard.Producer do
     end
   end
 
-  defp get_records(%__MODULE__{demand: demand, kinesis_opts: kinesis_opts} = state) do
+  defp get_records(
+         %__MODULE__{demand: demand, kinesis_opts: kinesis_opts, demand_limit: demand_limit} = state
+       ) do
     state
-    |> get_records_with_retry(Keyword.merge(kinesis_opts, limit: demand))
+    |> get_records_with_retry(Keyword.merge(kinesis_opts, limit: set_demand(demand_limit, demand)))
     |> maybe_end_of_shard_reached(state)
   end
+
+  defp set_demand(demand_limit, demand) when demand > demand_limit, do: demand_limit
+  defp set_demand(_demand_limit, demand), do: demand
 
   @retry with: 500 |> exponential_backoff() |> Stream.take(5)
   defp get_records_with_retry(state, kinesis_opts) do
@@ -317,6 +325,17 @@ defmodule KinesisClient.Stream.Shard.Producer do
       }
 
     {:noreply, wrap_records(records), new_state}
+  end
+
+  defp maybe_end_of_shard_reached(
+         {:error, {"ValidationException", _error_msg} = error},
+         %{shard_id: shard_id, demand_limit: demand_limit} = state
+       ) do
+    Logger.error(
+      "Shard #{shard_id} encountered error when getting records: #{inspect(error)} and the config limit is set to #{demand_limit}"
+    )
+
+    {:noreply, [], state}
   end
 
   defp maybe_end_of_shard_reached({:error, error}, %{shard_id: shard_id} = state) do
@@ -412,4 +431,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
         :ok
     end
   end
+
+  defp set_demand_limit(nil), do: @default_records_limit
+  defp set_demand_limit(kinesis_opts), do: Keyword.get(kinesis_opts, :limit, @default_records_limit)
 end
