@@ -96,6 +96,33 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
     assert_receive {:acked, %{success: _successful, checkpoint: "12345", failed: []}}, 10_000
   end
 
+  test "close the shard when getting ResourceNotFoundException error" do
+    opts = producer_opts(status: :started)
+    {:ok, producer} = start_supervised({Producer, opts})
+    {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+    KinesisMock
+    |> expect(:get_shard_iterator, fn _, _, _, _opts ->
+      {:error, {"ResourceNotFoundException", "ResourceNotFoundException error"}}
+    end)
+
+    AppStateMock
+    |> expect(:close_shard, fn in_app_name, in_stream_name, in_shard_id, in_lease_owner, _opts ->
+      assert in_app_name == opts[:app_name]
+      assert in_stream_name == opts[:stream_name]
+      assert in_shard_id == opts[:shard_id]
+      assert in_lease_owner == opts[:lease_owner]
+      :ok
+    end)
+
+    GenStage.sync_subscribe(consumer, to: producer)
+
+    send(producer, :shard_closed)
+
+    assert_receive {:shard_closed, state}, 10_000
+    assert state.status == :closed
+  end
+
   describe "test demand_limit in the state" do
     test "demand_limit is set correctly in the state when initializing" do
       opts = producer_opts(kinesis_opts: [limit: 1000])
