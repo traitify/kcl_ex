@@ -382,7 +382,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
     )
   end
 
-  def get_shard_iterator_with_retry(stream_name, shard_id, shard_iterator_type, kinesis_opts) do
+  defp get_shard_iterator_with_retry(stream_name, shard_id, shard_iterator_type, kinesis_opts) do
     retry with: 500 |> exponential_backoff() |> Stream.take(5) do
       stream_name
       |> Kinesis.get_shard_iterator(shard_id, shard_iterator_type, kinesis_opts)
