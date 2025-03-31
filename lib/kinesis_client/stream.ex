@@ -49,7 +49,7 @@ defmodule KinesisClient.Stream do
         processors: opts[:processors],
         batchers: opts[:batchers]
       ]
-      |> optional_kw(:app_state_opts, Keyword.get(opts, :app_state_opts))
+      |> optional_kw(:app_state_opts, fetch_value_for_key!(opts, :app_state_opts))
       |> optional_kw(:lease_renew_interval, Keyword.get(opts, :lease_renew_interval))
       |> optional_kw(:lease_expiry, Keyword.get(opts, :lease_expiry))
 
@@ -119,6 +119,17 @@ defmodule KinesisClient.Stream do
 
       _ ->
         raise ArgumentError, message: ":shard_processor option must be a module name"
+    end
+  end
+
+  defp fetch_value_for_key!(opts, key) do
+    try do
+      Keyword.fetch!(opts, key)
+    rescue
+      KeyError ->
+        raise KeyError,
+          message:
+            "#{key} is a required option and needs to be included in the config. Please refer to https://github.com/traitify/kcl_ex/blob/master/README.md"
     end
   end
 end

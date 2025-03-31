@@ -5,6 +5,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
   @behaviour Broadway.Producer
 
   use GenStage
+  use Retry
   use Retry.Annotation
 
   alias KinesisClient.Kinesis
@@ -138,6 +139,8 @@ defmodule KinesisClient.Stream.Shard.Producer do
     )
 
     :ok = Coordinator.close_shard(coordinator, shard_id)
+
+    notify({:shard_closed, state}, state)
 
     {:noreply, [], state}
   end
@@ -275,7 +278,16 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
       {:error, {"ResourceNotFoundException", error_message}} ->
         Logger.error(
-          "Shard #{state.shard_id} (get_records).ResourceNotFoundException.#{error_message}: #{inspect(state)})"
+          "Shard #{state.shard_id} ResourceNotFoundException error: #{error_message} - state: #{inspect(state)}"
+        )
+
+        state = handle_closed_shard(%{state | status: :closed})
+
+        {:noreply, [], state}
+
+      {:error, error} ->
+        Logger.error(
+          "Shard #{state.shard_id} unable to get shard iterator: #{inspect(error)} - state: #{inspect(state)}"
         )
 
         {:noreply, [], state}
@@ -370,14 +382,25 @@ defmodule KinesisClient.Stream.Shard.Producer do
     )
   end
 
-  @retry with: 500 |> exponential_backoff() |> Stream.take(5)
   defp get_shard_iterator_with_retry(stream_name, shard_id, shard_iterator_type, kinesis_opts) do
-    Kinesis.get_shard_iterator(
-      stream_name,
-      shard_id,
-      shard_iterator_type,
-      kinesis_opts
-    )
+    retry with: 500 |> exponential_backoff() |> Stream.take(5) do
+      stream_name
+      |> Kinesis.get_shard_iterator(shard_id, shard_iterator_type, kinesis_opts)
+      |> case do
+        {:error, {"ResourceNotFoundException", _}} = error -> {:no_retry, error}
+        {:ok, _} = result -> result
+        {:error, _error} = error -> error
+      end
+    after
+      result ->
+        result
+        |> case do
+          {:ok, _} = ok_result -> ok_result
+          {:no_retry, error} -> error
+        end
+    else
+      error -> error
+    end
   end
 
   # convert Kinesis records to Broadway messages

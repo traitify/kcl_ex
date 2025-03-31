@@ -36,10 +36,27 @@ defmodule KinesisClient.StreamTest do
     opts = [
       stream_name: stream_name,
       app_name: app_name,
-      shard_consumer: KinesisClient.TestShardConsumer
+      shard_consumer: KinesisClient.TestShardConsumer,
+      app_state_opts: [adapter: :test]
     ]
 
     {:ok, pid} = start_supervised({Stream, opts})
     assert Process.alive?(pid)
+  end
+
+  test "start_link/1 fails when app_state_opts is missing" do
+    stream_name = "foo_stream"
+    app_name = "foo"
+
+    opts = [
+      stream_name: stream_name,
+      app_name: app_name,
+      shard_consumer: KinesisClient.TestShardConsumer
+    ]
+
+    assert {:error, {{%KeyError{message: message}, _}, _}} = start_supervised({Stream, opts})
+
+    assert message ==
+             "app_state_opts is a required option and needs to be included in the config. Please refer to https://github.com/traitify/kcl_ex/blob/master/README.md"
   end
 end
