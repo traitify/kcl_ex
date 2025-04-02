@@ -229,7 +229,10 @@ defmodule KinesisClient.Stream.Coordinator do
         [parent1, parent2] ->
           case {get_lease(parent1, state), get_lease(parent2, state)} do
             {%{completed: true}, %{completed: true}} ->
-              case start_shard(shard_id, state) do
+              shard_id
+              |> maybe_start_shard(state, get_lease(shard_id, state))
+              |> case do
+                :ok -> acc
                 {:ok, pid} -> Map.put(acc, Process.monitor(pid), shard_id)
               end
 
@@ -246,7 +249,6 @@ defmodule KinesisClient.Stream.Coordinator do
 
   defp maybe_start_shard(shard_id, _state, %{completed: true}) do
     Logger.info("Skipping shard #{shard_id} because it is already completed")
-    :ok
   end
 
   defp maybe_start_shard(shard_id, state, _shard_lease) do
