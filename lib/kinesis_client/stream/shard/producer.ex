@@ -248,7 +248,13 @@ defmodule KinesisClient.Stream.Shard.Producer do
           })
 
         :not_found ->
-          raise "No lease has been created for #{state.app_name}-#{state.shard_id}"
+          Logger.error(
+            "Producer cannot get records, no lease has been created for #{state.app_name}-#{state.shard_id} - closing shard"
+          )
+
+          Coordinator.close_shard(state.coordinator_name, state.shard_id)
+
+          {:noreply, [], state}
       end
 
     GenStage.reply(from, :ok)
