@@ -43,7 +43,7 @@ defmodule KinesisClient.Stream.AppState.Adapter do
               shard_lease :: DynamoShardLease.t() | EctoShardLease.t(),
               opts :: keyword
             ) ::
-              {:ok, new_lease_count :: integer} | :lease_renew_failed | {:error, any}
+              {:ok, new_lease_count :: integer} | {:error, :lease_renew_failed} | {:error, any}
 
   @callback take_lease(
               app_name :: String.t(),
@@ -53,7 +53,7 @@ defmodule KinesisClient.Stream.AppState.Adapter do
               lease_count :: integer,
               opts :: keyword
             ) ::
-              {:ok, new_lease_count :: integer} | :lease_take_failed | {:error, any}
+              {:ok, new_lease_count :: integer} | {:error, :lease_take_failed} | {:error, any}
 
   @callback close_shard(
               app_name :: String.t(),

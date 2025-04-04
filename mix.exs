@@ -4,7 +4,7 @@ defmodule KinesisClient.Mixfile do
   def project do
     [
       app: :kinesis_client,
-      version: "1.1.12",
+      version: "1.1.13",
       elixir: "~> 1.16.0-otp-26",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,

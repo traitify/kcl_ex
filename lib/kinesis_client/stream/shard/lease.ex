@@ -163,7 +163,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
         notify({:lease_renewed, state}, state)
         state
 
-      :lease_renew_failed ->
+      {:error, :lease_renew_failed} ->
         Logger.error(
           "Failed to renew lease, stopping producer: [app_name: #{app_name}, " <>
             "shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}]"
@@ -205,15 +205,14 @@ defmodule KinesisClient.Stream.Shard.Lease do
         :ok = Pipeline.start(state)
         state
 
-      :lease_take_failed ->
-        # TODO
-        # :ok = Processor.ensure_halted(state)
-        %{state | lease_holder: false, lease_count_increment_time: current_time()}
-
       {:error, :lease_take_failed} ->
         # TODO
         # :ok = Processor.ensure_halted(state)
         %{state | lease_holder: false, lease_count_increment_time: current_time()}
+
+      {:error, e} ->
+        Logger.error("Error trying to take lease for #{state.shard_id}: #{inspect(e)}")
+        state
     end
   end
 
