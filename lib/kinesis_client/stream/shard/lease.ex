@@ -2,6 +2,8 @@ defmodule KinesisClient.Stream.Shard.Lease do
   @moduledoc false
   use GenServer
 
+  import KinesisClient.Util
+
   alias KinesisClient.Stream.AppState
   alias KinesisClient.Stream.Shard.Pipeline
 
@@ -14,7 +16,9 @@ defmodule KinesisClient.Stream.Shard.Lease do
   @no_limit -1
 
   def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts, name: name(opts[:shard_id]))
+    GenServer.start_link(__MODULE__, opts,
+      name: register_name(__MODULE__, opts[:app_name], opts[:stream_name], [opts[:shard_id]])
+    )
   end
 
   defstruct [
@@ -253,9 +257,5 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
   defp current_time do
     System.monotonic_time(:millisecond)
-  end
-
-  def name(shard_id) do
-    Module.concat(__MODULE__, shard_id)
   end
 end

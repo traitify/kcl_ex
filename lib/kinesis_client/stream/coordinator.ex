@@ -7,6 +7,8 @@ defmodule KinesisClient.Stream.Coordinator do
   use GenServer
   use Retry.Annotation
 
+  import KinesisClient.Util
+
   alias KinesisClient.Kinesis
   alias KinesisClient.Stream.AppState
   alias KinesisClient.Stream.Shard
@@ -87,7 +89,7 @@ defmodule KinesisClient.Stream.Coordinator do
 
     Process.demonitor(ref, [:flush])
     Logger.info("Stopping shard: #{shard_id}")
-    Shard.stop(Shard.name(sn, shard_id))
+    Shard.stop(register_name(KinesisClient.Stream.Shard, state.app_name, sn, [shard_id]))
 
     describe_stream(state)
   end
@@ -264,7 +266,10 @@ defmodule KinesisClient.Stream.Coordinator do
     shard_args =
       shard_args
       |> Keyword.put(:shard_id, shard_id)
-      |> Keyword.put(:shard_name, Shard.name(state.stream_name, shard_id))
+      |> Keyword.put(
+        :shard_name,
+        register_name(KinesisClient.Stream.Shard, state.app_name, state.stream_name, [shard_id])
+      )
 
     shard_supervisor
     |> Shard.start(shard_args)

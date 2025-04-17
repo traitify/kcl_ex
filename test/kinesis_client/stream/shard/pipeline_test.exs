@@ -6,10 +6,12 @@ defmodule KinesisClient.Stream.Shard.PipelineTest do
 
   test "can start producer" do
     app_name = "sdf9023kl"
+    stream_name = "pipeline-test-stream"
     shard_id = "shard-1"
 
     opts = [
       app_name: app_name,
+      stream_name: stream_name,
       app_state_opts: [adapter: :test],
       shard_id: shard_id,
       kinesis_opts: [adapter: KinesisMock],
@@ -60,19 +62,21 @@ defmodule KinesisClient.Stream.Shard.PipelineTest do
 
     assert Process.alive?(pid)
 
-    assert :ok == Pipeline.start(%{app_name: app_name, shard_id: shard_id})
+    assert :ok ==
+             Pipeline.start(%{app_name: app_name, stream_name: stream_name, shard_id: shard_id})
   end
 
   test "can stop producer" do
     app_name = "sdf9023kl"
+    stream_name = "pipeline-test-stream"
     shard_id = "shard-1"
 
-    opts = [app_name: app_name, shard_id: shard_id]
+    opts = [app_name: app_name, stream_name: stream_name, shard_id: shard_id]
 
     {:ok, pid} = start_supervised({Pipeline, opts})
 
     assert Process.alive?(pid)
 
-    assert :ok == Pipeline.stop(%{app_name: app_name, shard_id: shard_id})
+    assert :ok == Pipeline.stop(%{app_name: app_name, stream_name: stream_name, shard_id: shard_id})
   end
 end
