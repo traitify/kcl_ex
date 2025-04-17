@@ -11,6 +11,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
   # The amount of time that must have elapsed since the least_count was incremented in order to
   # consider the lease expired.
   @default_lease_expiry 90_001
+  @no_limit -1
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: name(opts[:shard_id]))
@@ -28,6 +29,8 @@ defmodule KinesisClient.Stream.Shard.Lease do
     :notify,
     :lease_expiry,
     :lease_holder,
+    :lease_renewal_limit,
+    :lease_renewal_count,
     :pipeline
   ]
 
@@ -43,6 +46,8 @@ defmodule KinesisClient.Stream.Shard.Lease do
       app_state_opts: Keyword.get(opts, :app_state_opts, []),
       renew_interval: Keyword.get(opts, :renew_interval, @default_renew_interval),
       lease_expiry: Keyword.get(opts, :lease_expiry, @default_lease_expiry),
+      lease_renewal_limit: Keyword.get(opts, :lease_renewal_limit, @no_limit),
+      lease_renewal_count: Keyword.get(opts, :lease_renewal_count, 0),
       lease_count_increment_time: current_time(),
       notify: Keyword.get(opts, :notify),
       pipeline: Keyword.get(opts, :pipeline, Pipeline)
@@ -149,6 +154,20 @@ defmodule KinesisClient.Stream.Shard.Lease do
     end
   end
 
+  defp renew_lease(_shard_lease, %{lease_renewal_limit: limit, lease_renewal_count: count} = state)
+       when count == limit do
+    Logger.info("Releasing lease: shard_id: #{state.shard_id}, worker: #{state.lease_owner}")
+
+    %{
+      state
+      | lease_holder: false,
+        lease_count_increment_time: current_time(),
+        lease_renewal_count: 0
+    }
+    |> tap(&notify({:lease_released, &1}, state))
+    |> tap(&Pipeline.stop(&1))
+  end
+
   defp renew_lease(shard_lease, %{app_state_opts: opts, app_name: app_name} = state) do
     expected = shard_lease.lease_count + 1
 
@@ -159,7 +178,11 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
     case AppState.renew_lease(app_name, state.stream_name, shard_lease, opts) do
       {:ok, ^expected} ->
-        state = set_lease_count(expected, true, state)
+        state =
+          expected
+          |> set_lease_count(true, state)
+          |> then(&%{&1 | lease_renewal_count: &1.lease_renewal_count + 1})
+
         notify({:lease_renewed, state}, state)
         state
 
@@ -170,7 +193,13 @@ defmodule KinesisClient.Stream.Shard.Lease do
         )
 
         :ok = Pipeline.stop(state)
-        %{state | lease_holder: false, lease_count_increment_time: current_time()}
+
+        %{
+          state
+          | lease_holder: false,
+            lease_count_increment_time: current_time(),
+            lease_renewal_count: 0
+        }
 
       {:error, e} ->
         Logger.error("Error trying to renew lease for #{state.shard_id}: #{inspect(e)}")
