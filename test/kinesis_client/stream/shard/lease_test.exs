@@ -163,6 +163,61 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
     assert lease_state.lease_count == shard_lease.lease_count
   end
 
+  describe "the limit of renewing lease" do
+    test "when the limit is set and met" do
+      shard_lease_count = 12
+      lease_opts = build_lease_opts(lease_renewal_limit: 2, lease_renewal_count: 2)
+
+      shard_lease =
+        build_shard_lease(lease_count: shard_lease_count, lease_owner: lease_opts[:lease_owner])
+
+      AppStateMock
+      |> stub(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+        shard_lease
+      end)
+
+      {:ok, lease} = start_supervised({Lease, lease_opts})
+
+      assert_receive {:lease_released, lease_state}, 1_000
+
+      assert lease_state.lease_holder == false
+      assert lease_state.lease_renewal_count == 0
+
+      assert Process.alive?(lease)
+    end
+
+    test "when there is no limit" do
+      shard_lease_count = 12
+      lease_opts = build_lease_opts(lease_renewal_limit: -1, lease_renewal_count: 10)
+
+      shard_lease =
+        build_shard_lease(lease_count: shard_lease_count, lease_owner: lease_opts[:lease_owner])
+
+      AppStateMock
+      |> stub(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+        shard_lease
+      end)
+      |> expect(:renew_lease, fn app_name, stream_name, %{lease_count: lc} = sl, _ ->
+        assert app_name == lease_opts[:app_name]
+        assert stream_name == lease_opts[:stream_name]
+        assert sl.shard_id == shard_lease.shard_id
+        assert sl.lease_count == shard_lease.lease_count
+        assert sl.lease_owner == shard_lease.lease_owner
+        {:ok, lc + 1}
+      end)
+
+      {:ok, lease} = start_supervised({Lease, lease_opts})
+
+      assert_receive {:lease_renewed, lease_state}, 1_000
+
+      assert lease_state.lease_holder == true
+      assert lease_state.lease_count == shard_lease_count + 1
+      assert lease_state.lease_renewal_count == 11
+
+      assert Process.alive?(lease)
+    end
+  end
+
   defp build_lease_opts(overrides \\ []) do
     Keyword.merge(
       [
