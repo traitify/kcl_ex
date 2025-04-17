@@ -47,7 +47,7 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
       |> Map.put(:shard_consumer, opts[:shard_consumer])
 
     pipeline_opts = [
-      name: name(opts[:app_name], opts[:shard_id]),
+      name: register_name(__MODULE__, opts[:app_name], opts[:stream_name], [opts[:shard_id]]),
       producer: [
         module: {Producer, producer_opts},
         concurrency: 1
@@ -63,7 +63,10 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
   end
 
   def start(app_state) do
-    names = Broadway.producer_names(name(app_state.app_name, app_state.shard_id))
+    names =
+      Broadway.producer_names(
+        register_name(__MODULE__, app_state.app_name, app_state.stream_name, [app_state.shard_id])
+      )
 
     errors =
       Enum.reduce(names, [], fn name, errs ->
@@ -83,7 +86,10 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
   end
 
   def stop(app_state) do
-    names = Broadway.producer_names(name(app_state.app_name, app_state.shard_id))
+    names =
+      Broadway.producer_names(
+        register_name(__MODULE__, app_state.app_name, app_state.stream_name, [app_state.shard_id])
+      )
 
     errors =
       Enum.reduce(names, [], fn name, errs ->
@@ -120,9 +126,5 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
     module = Map.get(context, :shard_consumer)
 
     module.handle_failed(messages, context)
-  end
-
-  def name(app_name, shard_id) do
-    Module.concat([__MODULE__, app_name, shard_id])
   end
 end
