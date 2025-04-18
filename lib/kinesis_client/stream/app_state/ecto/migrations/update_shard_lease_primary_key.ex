@@ -1,5 +1,6 @@
 defmodule KinesisClient.Stream.AppState.Ecto.UpdateShardLeasePrimaryKey do
-  use Ecto.Migration, disable_ddl_transaction: true
+  use Ecto.Migration
+  @disable_ddl_transaction true
 
   def up do
     # Step 1: Ensure app_name and stream_name are NOT NULL
