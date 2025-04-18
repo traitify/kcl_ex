@@ -1,15 +1,16 @@
 defmodule KinesisClient.Stream.AppState.Ecto.UpdateShardLeasePrimaryKey do
   use Ecto.Migration
-  @disable_ddl_transaction true
 
   def up do
     # Step 1: Ensure app_name and stream_name are NOT NULL
     execute("ALTER TABLE shard_lease ALTER COLUMN app_name SET NOT NULL")
     execute("ALTER TABLE shard_lease ALTER COLUMN stream_name SET NOT NULL")
 
+    execute("DROP INDEX IF EXISTS shard_lease_composite_unique")
+
     # Step 2: Add a unique constraint to enforce uniqueness of the composite key
     execute(
-      "CREATE UNIQUE INDEX CONCURRENTLY shard_lease_composite_unique ON shard_lease (shard_id, app_name, stream_name)"
+      "CREATE UNIQUE INDEX shard_lease_composite_unique ON shard_lease (shard_id, app_name, stream_name)"
     )
 
     # Step 3: Drop the existing primary key constraint
