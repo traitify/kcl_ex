@@ -39,6 +39,13 @@ defmodule KinesisClient.Stream do
     coordinator_name = get_coordinator_name(opts)
     shard_consumer = get_shard_consumer(opts)
 
+    Logger.metadata(
+      kcl_app_name: app_name,
+      kcl_stream_name: stream_name,
+      kcl_shard_supervisor: shard_supervisor_name,
+      kcl_coordinator_name: coordinator_name
+    )
+
     shard_args =
       [
         app_name: opts[:app_name],

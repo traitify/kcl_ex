@@ -57,6 +57,13 @@ defmodule KinesisClient.Stream.Shard.Lease do
       pipeline: Keyword.get(opts, :pipeline, Pipeline)
     }
 
+    Logger.metadata(
+      kcl_app_name: state.app_name,
+      kcl_stream_name: state.stream_name,
+      kcl_shard_id: state.shard_id,
+      kcl_lease_owner: state.lease_owner
+    )
+
     Process.send_after(self(), :take_or_renew_lease, state.renew_interval)
 
     Logger.info("Initializing KinesisClient.Stream.Lease: #{inspect(state)}")
