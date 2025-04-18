@@ -130,14 +130,6 @@ defmodule KinesisClient.Stream.Shard.Producer do
         "stream_name: #{state.stream_name}]"
     )
 
-    AppState.close_shard(
-      state.app_name,
-      state.stream_name,
-      state.shard_id,
-      state.lease_owner,
-      state.app_state_opts
-    )
-
     :ok = Coordinator.close_shard(coordinator, shard_id)
 
     notify({:shard_closed, state}, state)
@@ -224,12 +216,16 @@ defmodule KinesisClient.Stream.Shard.Producer do
     Logger.info("Starting KinesisClient.Stream.Shard.Producer: #{inspect(state)}")
 
     {:noreply, records, new_state} =
-      case AppState.get_lease(
-             state.app_name,
-             state.stream_name,
-             state.shard_id,
-             state.app_state_opts
-           ) do
+      state.app_name
+      |> AppState.get_lease(state.stream_name, state.shard_id, state.app_state_opts)
+      |> case do
+        %{completed: true} ->
+          Logger.info("Attempting to start Producer but shard #{state.shard_id} is completed")
+
+          Coordinator.close_shard(state.coordinator_name, state.shard_id)
+
+          {:noreply, [], state}
+
         %{checkpoint: nil} ->
           get_records(%{
             state
@@ -427,6 +423,8 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
     Logger.info("Handling closing shard #{inspect(s.shard_id)}")
 
+    AppState.close_shard(s.app_name, s.stream_name, s.shard_id, s.lease_owner, s.app_state_opts)
+
     %{s | shard_closed_timer: timer}
   end
 
@@ -438,6 +436,8 @@ defmodule KinesisClient.Stream.Shard.Producer do
     timer = Process.send_after(self(), :shard_closed, delay)
 
     Logger.info("Handling closing shard #{inspect(s.shard_id)} again")
+
+    AppState.close_shard(s.app_name, s.stream_name, s.shard_id, s.lease_owner, s.app_state_opts)
 
     %{s | shard_closed_timer: timer}
   end
