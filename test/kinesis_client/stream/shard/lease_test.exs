@@ -77,7 +77,7 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
 
     test "and when lease_owner matches shard lease owner then renew_lease" do
       shard_lease_count = 12
-      lease_opts = build_lease_opts()
+      lease_opts = build_lease_opts(lease_holder: true)
 
       shard_lease =
         build_shard_lease(lease_count: shard_lease_count, lease_owner: lease_opts[:lease_owner])
@@ -166,7 +166,9 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
   describe "the limit of renewing lease" do
     test "when the limit is set and met" do
       shard_lease_count = 12
-      lease_opts = build_lease_opts(lease_renewal_limit: 2, lease_renewal_count: 2)
+
+      lease_opts =
+        build_lease_opts(lease_renewal_limit: 2, lease_renewal_count: 2, lease_holder: true)
 
       shard_lease =
         build_shard_lease(lease_count: shard_lease_count, lease_owner: lease_opts[:lease_owner])
@@ -188,7 +190,9 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
 
     test "when there is no limit" do
       shard_lease_count = 12
-      lease_opts = build_lease_opts(lease_renewal_limit: -1, lease_renewal_count: 10)
+
+      lease_opts =
+        build_lease_opts(lease_renewal_limit: -1, lease_renewal_count: 10, lease_holder: true)
 
       shard_lease =
         build_shard_lease(lease_count: shard_lease_count, lease_owner: lease_opts[:lease_owner])

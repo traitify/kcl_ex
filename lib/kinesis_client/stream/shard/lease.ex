@@ -52,6 +52,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
       lease_expiry: Keyword.get(opts, :lease_expiry, @default_lease_expiry),
       lease_renewal_limit: Keyword.get(opts, :lease_renewal_limit, @no_limit),
       lease_renewal_count: Keyword.get(opts, :lease_renewal_count, 0),
+      lease_holder: Keyword.get(opts, :lease_holder, false),
       lease_count_increment_time: current_time(),
       notify: Keyword.get(opts, :notify),
       pipeline: Keyword.get(opts, :pipeline, Pipeline)
@@ -109,7 +110,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
   defp take_or_renew_lease(shard_lease, %{lease_expiry: lease_expiry} = state) do
     cond do
-      shard_lease.lease_owner == state.lease_owner ->
+      shard_lease.lease_owner == state.lease_owner and state.lease_holder ->
         renew_lease(shard_lease, state)
 
       current_time() - state.lease_count_increment_time > lease_expiry ->
