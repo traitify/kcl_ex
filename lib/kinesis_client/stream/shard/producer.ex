@@ -111,15 +111,39 @@ defmodule KinesisClient.Stream.Shard.Producer do
   end
 
   @impl GenStage
+  def handle_info(:get_records, %{status: :stopped} = state) do
+    if is_lease_owner?(state) do
+      Logger.info(
+        "Producer for shard #{state.shard_id} is stopped, but lease owner is still the same - getting records."
+      )
+
+      get_records(%{state | poll_timer: nil})
+    else
+      Logger.info(
+        "Shard #{state.shard_id} is stopped, but lease owner is different - not getting records"
+      )
+
+      {:noreply, [], state}
+    end
+  end
+
+  @impl GenStage
   def handle_info(:get_records, state) do
     notify(:poll_timer_executed, state)
 
-    Logger.debug(
-      "Try to fulfill pending demand #{state.demand}: " <>
-        "[app_name: #{state.app_name}, shard_id: #{state.shard_id}]"
-    )
+    if is_lease_owner?(state) do
+      Logger.info(
+        "Try to fulfill pending demand #{state.demand}: [stream_name: #{state.stream_name}, shard_id: #{state.shard_id}]"
+      )
 
-    get_records(%{state | poll_timer: nil})
+      get_records(%{state | poll_timer: nil})
+    else
+      Logger.info(
+        "Lease owner is different, not getting records: [stream_name: #{state.stream_name}, shard_id: #{state.shard_id}]"
+      )
+
+      {:noreply, [], state}
+    end
   end
 
   @impl GenStage
@@ -220,7 +244,9 @@ defmodule KinesisClient.Stream.Shard.Producer do
       |> AppState.get_lease(state.stream_name, state.shard_id, state.app_state_opts)
       |> case do
         %{completed: true} ->
-          Logger.info("Attempting to start Producer but shard #{state.shard_id} is completed")
+          Logger.info(
+            "Attempting to start Producer but shard #{state.shard_id} is already completed"
+          )
 
           Coordinator.close_shard(state.coordinator_name, state.shard_id)
 
@@ -259,6 +285,8 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @impl GenStage
   def handle_call(:stop, _from, state) do
+    Logger.info("Stopping KinesisClient.Stream.Shard.Producer: #{inspect(state)}")
+
     {:reply, :ok, [], %{state | status: :stopped}}
   end
 
@@ -448,6 +476,12 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   defp schedule_shard_poll(interval) do
     Process.send_after(self(), :get_records, interval)
+  end
+
+  defp is_lease_owner?(state) do
+    state.app_name
+    |> AppState.get_lease(state.stream_name, state.shard_id, state.app_state_opts)
+    |> then(fn lease -> lease.lease_owner == state.lease_owner end)
   end
 
   defp notify(message, %__MODULE__{notify_pid: notify_pid}) do
