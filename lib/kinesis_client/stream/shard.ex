@@ -36,6 +36,13 @@ defmodule KinesisClient.Stream.Shard do
       coordinator_name: opts[:coordinator_name]
     ]
 
+    Logger.metadata(
+      kcl_app_name: opts[:app_name],
+      kcl_stream_name: opts[:stream_name],
+      kcl_shard_id: opts[:shard_id],
+      kcl_lease_owner: opts[:lease_owner]
+    )
+
     children = [
       {Lease, lease_opts},
       {Pipeline, pipeline_opts}
