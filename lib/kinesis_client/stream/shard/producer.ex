@@ -67,13 +67,6 @@ defmodule KinesisClient.Stream.Shard.Producer do
       demand_limit: set_demand_limit(opts[:kinesis_opts])
     }
 
-    Logger.metadata(
-      kcl_app_name: state.app_name,
-      kcl_stream_name: state.stream_name,
-      kcl_shard_id: state.shard_id,
-      kcl_lease_owner: state.lease_owner
-    )
-
     notify({:init, state}, state)
 
     Logger.info("Initializing KinesisClient.Stream.Shard.Producer: #{inspect(state)}")

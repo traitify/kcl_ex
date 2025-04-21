@@ -64,14 +64,6 @@ defmodule KinesisClient.Stream.Coordinator do
       retry_timeout: Keyword.get(opts, :retry_timeout, 30_000)
     }
 
-    Logger.metadata(
-      kcl_coordinator_name: state.name,
-      kcl_app_name: state.app_name,
-      kcl_stream_name: state.stream_name,
-      kcl_shard_supervisor_name: state.shard_supervisor_name,
-      kcl_worker_ref: state.worker_ref
-    )
-
     Logger.info("Initializing KinesisClient.Stream.Coordinator: #{inspect(state)}")
     {:ok, state, {:continue, :initialize}}
   end

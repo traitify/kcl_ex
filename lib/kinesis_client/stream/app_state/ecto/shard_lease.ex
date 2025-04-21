@@ -7,11 +7,10 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLease do
 
   @fields [:shard_id, :app_name, :stream_name, :lease_owner, :lease_count, :checkpoint, :completed]
 
-  @primary_key false
+  @primary_key {:shard_id, :string, autogenerate: false}
   schema "shard_lease" do
-    field(:shard_id, :string, primary_key: true)
-    field(:app_name, :string, primary_key: true)
-    field(:stream_name, :string, primary_key: true)
+    field(:app_name, :string)
+    field(:stream_name, :string)
     field(:lease_owner, :string)
     field(:lease_count, :integer)
     field(:checkpoint, :string)
