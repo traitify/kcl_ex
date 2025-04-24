@@ -161,6 +161,8 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
   defp renew_lease(_shard_lease, %{lease_renewal_limit: limit, lease_renewal_count: count} = state)
        when count == limit do
+    Logger.info("Releasing lease: shard_id: #{state.shard_id}, worker: #{state.lease_owner}")
+
     %{
       state
       | lease_holder: false,
