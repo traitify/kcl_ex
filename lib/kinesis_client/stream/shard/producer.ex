@@ -373,12 +373,14 @@ defmodule KinesisClient.Stream.Shard.Producer do
       Kinesis.get_records(state.shard_iterator, kinesis_opts)
       |> tap(&Logger.info("Shard #{state.shard_id} Kinesis get_records_with_retry: #{inspect(&1)}"))
     else
-      {:ok, :lease_owner_different}
+      {:ok, :lease_owner_changed}
     end
   end
 
-  defp maybe_end_of_shard_reached({:ok, :lease_owner_different}, state) do
-    Logger.info("Shard #{state.shard_id} lease owner is different, not getting records")
+  defp maybe_end_of_shard_reached({:ok, :lease_owner_changed}, state) do
+    Logger.info(
+      "#{inspect(state.lease_owner)} no longer has the shard #{state.shard_id}, not getting records"
+    )
 
     {:noreply, [], state}
   end
