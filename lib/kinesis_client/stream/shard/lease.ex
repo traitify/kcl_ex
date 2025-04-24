@@ -161,25 +161,14 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
   defp renew_lease(_shard_lease, %{lease_renewal_limit: limit, lease_renewal_count: count} = state)
        when count == limit do
-    state
-    |> Pipeline.stop()
-    |> case do
-      :shard_closed ->
-        Logger.info("Unable to stop the producer because shard is closed")
-
-        state
-
-      _ ->
-        Logger.info("Releasing lease: shard_id: #{state.shard_id}, worker: #{state.lease_owner}")
-
-        %{
-          state
-          | lease_holder: false,
-            lease_count_increment_time: current_time(),
-            lease_renewal_count: 0
-        }
-        |> tap(&notify({:lease_released, &1}, &1))
-    end
+    %{
+      state
+      | lease_holder: false,
+        lease_count_increment_time: current_time(),
+        lease_renewal_count: 0
+    }
+    |> tap(&notify({:lease_released, &1}, &1))
+    |> tap(&Pipeline.stop(&1))
   end
 
   defp renew_lease(shard_lease, %{app_state_opts: opts, app_name: app_name} = state) do

@@ -20,6 +20,11 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
       {:ok, %{"NextShardIterator" => "foo", "MillisBehindLatest" => 5_000, "Records" => records}}
     end)
 
+    AppStateMock
+    |> stub(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+      %{lease_owner: opts[:lease_owner]}
+    end)
+
     GenStage.sync_subscribe(consumer, to: producer)
     assert_receive {:consumer_events, [record]}, 1_000
 
@@ -51,6 +56,11 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
       records = Enum.map(0..count, fn _ -> %{"Data" => "foo", "SequenceNumber" => "12345"} end)
 
       {:ok, %{"NextShardIterator" => "foo", "MillisBehindLatest" => 1_000, "Records" => records}}
+    end)
+
+    AppStateMock
+    |> stub(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+      %{lease_owner: opts[:lease_owner]}
     end)
 
     GenStage.sync_subscribe(consumer, to: producer, max_demand: 10, min_demand: 0)
@@ -86,6 +96,11 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
       assert in_lease_owner == opts[:lease_owner]
       assert in_checkpoint == "12345"
       :ok
+    end)
+
+    AppStateMock
+    |> stub(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+      %{lease_owner: opts[:lease_owner]}
     end)
 
     GenStage.sync_subscribe(consumer, to: producer, max_demand: 10, min_demand: 0)

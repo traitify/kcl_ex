@@ -312,7 +312,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
       "Unable to stop the Producer: #{inspect(state)} because shard #{state.shard_id} is closed"
     )
 
-    {:reply, :shard_closed, [], state}
+    {:reply, :ok, [], state}
   end
 
   @impl GenStage
