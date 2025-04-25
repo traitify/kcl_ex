@@ -94,26 +94,19 @@ defmodule KinesisClient.Stream.AppState.Mimic do
   defp maybe_create_lease(_to_module, {:error, _} = error, _opts), do: error
 
   defp maybe_create_lease(to_module, lease, opts) do
-    opts
-    |> get_app_name()
-    |> to_module.create_lease(get_stream_name(opts), lease.shard_id, lease.lease_owner, opts)
+    app_name = get_app_name(opts)
+    stream_name = get_stream_name(opts)
+
+    lease
+    |> Map.put(:app_name, app_name)
+    |> Map.put(:stream_name, stream_name)
+    |> to_module.create_lease(opts)
     |> case do
       :ok ->
-        # This is to update the lease count using take_lease function
-        to_module.take_lease(
-          lease.app_name,
-          lease.stream_name,
-          lease.shard_id,
-          lease.lease_owner,
-          lease.lease_count - 1,
-          opts
-        )
-
         lease
 
       error ->
         Logger.error("Error creating lease from mimic during migration: #{inspect(error)}")
-
         lease
     end
   end
