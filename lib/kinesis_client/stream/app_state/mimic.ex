@@ -94,12 +94,15 @@ defmodule KinesisClient.Stream.AppState.Mimic do
   defp maybe_create_lease(_to_module, {:error, _} = error, _opts), do: error
 
   defp maybe_create_lease(to_module, lease, opts) do
-    app_name = get_app_name(opts)
-    stream_name = get_stream_name(opts)
-
-    lease
-    |> Map.put(:app_name, app_name)
-    |> Map.put(:stream_name, stream_name)
+    %{
+      shard_id: lease.shard_id,
+      checkpoint: lease.checkpoint,
+      app_name: get_app_name(opts),
+      stream_name: get_stream_name(opts),
+      lease_owner: lease.lease_owner,
+      completed: lease.completed,
+      lease_count: lease.lease_count
+    }
     |> to_module.create_lease(opts)
     |> case do
       :ok ->
