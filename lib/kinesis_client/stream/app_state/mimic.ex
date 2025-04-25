@@ -96,7 +96,7 @@ defmodule KinesisClient.Stream.AppState.Mimic do
   defp maybe_create_lease(to_module, lease, opts) do
     opts
     |> get_app_name()
-    |> to_module.create_lease(get_stream_name(opts), lease.shard_id, lease.lease_owner)
+    |> to_module.create_lease(get_stream_name(opts), lease.shard_id, lease.lease_owner, opts)
     |> case do
       :ok ->
         # This is to update the lease count using take_lease function
