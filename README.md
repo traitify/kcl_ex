@@ -26,7 +26,17 @@ opts = [
   stream_name: "kcl-ex-test-stream",
   app_name: "my-test-app",
   shard_consumer: MyShardConsumer,
-  app_state_opts: [adapter: :ecto, repo: AssessmentService.Repo], # Or [adapter: :dynamo] or just []
+  app_state_opts: [
+    adapter: :ecto | :dynamo | :migrate,
+    # the repo option is required if the adapter is :repo
+    repo: AssessmentService.Repo,
+    # below options are required if the adapter is :migrate
+    migration: [from: :dynamo, to: :ecto],
+    app_name: app_name,
+    stream_name: stream_name
+  ],
+  # optional to limit the amount of times a lease can be renewed
+  lease_renewal_limit: 10,
   processors: [
     default: [
       concurrency: 1,
