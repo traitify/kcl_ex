@@ -54,7 +54,7 @@ defmodule KinesisClient.Stream.Shard.PipelineTest do
        }}
     end)
 
-    expect(AppStateMock, :get_lease, fn _, _, _, _ ->
+    expect(AppStateMock, :get_lease, 2, fn _, _, _, _ ->
       %ShardLease{checkpoint: nil}
     end)
 

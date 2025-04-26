@@ -112,19 +112,9 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @impl GenStage
   def handle_info(:get_records, %{status: :stopped} = state) do
-    if is_lease_owner?(state) do
-      Logger.info(
-        "Producer for shard #{state.shard_id} is stopped, but lease owner is still the same - getting records."
-      )
+    Logger.info("Shard #{state.shard_id} is stopped, not getting records")
 
-      get_records(%{state | poll_timer: nil})
-    else
-      Logger.info(
-        "Shard #{state.shard_id} is stopped, but lease owner is different - not getting records"
-      )
-
-      {:noreply, [], state}
-    end
+    {:noreply, [], state}
   end
 
   @impl GenStage
@@ -193,8 +183,25 @@ defmodule KinesisClient.Stream.Shard.Producer do
   end
 
   @impl GenStage
+  def handle_info({:ack, _ref, [], failed_msgs}, %{status: :stopped} = state) do
+    if is_lease_owner?(state) do
+      Logger.info(
+        "Shard #{state.shard_id} - Retrying #{length(failed_msgs)} failed messages - #{inspect(failed_msgs)}"
+      )
+
+      {:noreply, failed_msgs, state}
+    else
+      Logger.info("Stop retrying because the owner of shard #{state.shard_id} has changed")
+
+      {:noreply, [], state}
+    end
+  end
+
+  @impl GenStage
   def handle_info({:ack, _ref, [], failed_msgs}, state) do
-    Logger.info("Shard #{state.shard_id} - Retrying #{length(failed_msgs)} failed messages")
+    Logger.info(
+      "Shard #{state.shard_id} - Retrying #{length(failed_msgs)} failed messages - #{inspect(failed_msgs)}"
+    )
 
     state =
       case state.shard_closed_timer do
@@ -210,10 +217,26 @@ defmodule KinesisClient.Stream.Shard.Producer do
   end
 
   @impl GenStage
+  def handle_info({:ack, _ref, successful_msgs, failed_msgs}, %{status: :stopped} = state) do
+    if is_lease_owner?(state) do
+      Logger.info(
+        "Shard #{state.shard_id} - Acknowledged #{length(successful_msgs)} messages, " <>
+          "Retrying #{length(failed_msgs)} failed messages - #{inspect(failed_msgs)}"
+      )
+
+      {:noreply, failed_msgs, state}
+    else
+      Logger.info("Stop retrying because the owner of shard #{state.shard_id} has changed")
+
+      {:noreply, [], state}
+    end
+  end
+
+  @impl GenStage
   def handle_info({:ack, _ref, successful_msgs, failed_msgs}, state) do
     Logger.info(
       "Shard #{state.shard_id} - Acknowledged #{length(successful_msgs)} messages, " <>
-        "Retrying #{length(failed_msgs)} failed messages"
+        "Retrying #{length(failed_msgs)} failed messages - #{inspect(failed_msgs)}"
     )
 
     state =
@@ -284,6 +307,15 @@ defmodule KinesisClient.Stream.Shard.Producer do
   end
 
   @impl GenStage
+  def handle_call(:stop, _from, %{status: :closed} = state) do
+    Logger.info(
+      "Unable to stop the Producer: #{inspect(state)} because shard #{state.shard_id} is closed"
+    )
+
+    {:reply, :ok, [], state}
+  end
+
+  @impl GenStage
   def handle_call(:stop, _from, state) do
     Logger.info("Stopping KinesisClient.Stream.Shard.Producer: #{inspect(state)}")
 
@@ -337,8 +369,20 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @retry with: 500 |> exponential_backoff() |> Stream.take(5)
   defp get_records_with_retry(state, kinesis_opts) do
-    Kinesis.get_records(state.shard_iterator, kinesis_opts)
-    |> tap(&Logger.info("Shard #{state.shard_id} Kinesis get_records_with_retry: #{inspect(&1)}"))
+    if is_lease_owner?(state) do
+      Kinesis.get_records(state.shard_iterator, kinesis_opts)
+      |> tap(&Logger.info("Shard #{state.shard_id} Kinesis get_records_with_retry: #{inspect(&1)}"))
+    else
+      {:ok, :lease_owner_changed}
+    end
+  end
+
+  defp maybe_end_of_shard_reached({:ok, :lease_owner_changed}, state) do
+    Logger.info(
+      "#{inspect(state.lease_owner)} no longer has the shard #{state.shard_id}, not getting records"
+    )
+
+    {:noreply, [], state}
   end
 
   defp maybe_end_of_shard_reached(
