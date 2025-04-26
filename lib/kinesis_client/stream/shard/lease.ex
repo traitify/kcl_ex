@@ -12,7 +12,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
   @default_renew_interval 30_000
   # The amount of time that must have elapsed since the least_count was incremented in order to
   # consider the lease expired.
-  @default_lease_expiry 90_001
+  @default_lease_expiry 45_001
   @no_limit -1
 
   def start_link(opts) do
