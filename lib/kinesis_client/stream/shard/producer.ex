@@ -191,7 +191,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
       {:noreply, failed_msgs, state}
     else
-      Logger.info("Stop retrying because the owne of shard #{state.shard_id} has changed")
+      Logger.info("Stop retrying because the owner of shard #{state.shard_id} has changed")
 
       {:noreply, [], state}
     end
