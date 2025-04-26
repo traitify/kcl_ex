@@ -149,6 +149,19 @@ defmodule KinesisClient.Stream.AppState.Ecto do
     end
   end
 
+  def create_lease(attrs, opts) when is_map(attrs) do
+    repo = Keyword.get(opts, :repo)
+
+    with {:ok, _} <- ShardLeases.insert_shard_lease(attrs, repo) do
+      :ok
+    else
+      {:error, changeset} ->
+        changeset
+        |> extract_changeset_errors()
+        |> already_exists()
+    end
+  end
+
   defp get_repo(opts), do: {:ok, Keyword.get(opts, :repo)}
 
   defp run_migrations(repo, migrations \\ @migrations) do

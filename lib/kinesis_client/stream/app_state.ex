@@ -50,6 +50,7 @@ defmodule KinesisClient.Stream.AppState do
     case Keyword.get(opts, :adapter) do
       :ecto -> KinesisClient.Stream.AppState.Ecto
       :test -> KinesisClient.Stream.AppStateMock
+      :migrate -> KinesisClient.Stream.AppState.Mimic
       _ -> KinesisClient.Stream.AppState.Dynamo
     end
   end
