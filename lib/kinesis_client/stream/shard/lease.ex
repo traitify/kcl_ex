@@ -271,8 +271,8 @@ defmodule KinesisClient.Stream.Shard.Lease do
       state.app_state_opts
     )
     |> case do
-      [] -> 0
-      leases -> length(leases)
+      [] -> 1
+      leases -> length(leases) + 1
     end
   end
 end

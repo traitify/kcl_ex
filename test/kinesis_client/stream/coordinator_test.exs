@@ -136,6 +136,9 @@ defmodule KinesisClient.Stream.CoordinatorTest do
         "shardId-000000000003" -> shard3_lease
       end
     end)
+    |> stub(:get_leases_by_worker, fn _in_app_name, _in_stream_name, _lease_owner, _ ->
+      [shard0_lease, shard1_lease, shard2_lease, shard3_lease]
+    end)
 
     {:ok, _} = start_coordinator(opts)
 
