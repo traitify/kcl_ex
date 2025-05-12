@@ -47,6 +47,13 @@ defmodule KinesisClient.Stream.AppState.Dynamo do
   end
 
   @impl true
+  def get_leases_by_worker(_app_name, _stream_name, _lease_owner, _opts) do
+    raise BadFunctionError,
+      message:
+        "get_leases_by_worker/4 is not currently implemented for DynamoDB. Please implement the callback if you want to use DynamoDB."
+  end
+
+  @impl true
   def create_lease(app_name, _stream_name, shard_id, lease_owner, _opts \\ []) do
     update_opt = [condition_expression: "attribute_not_exists(shard_id)"]
 

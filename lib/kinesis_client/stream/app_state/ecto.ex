@@ -59,6 +59,18 @@ defmodule KinesisClient.Stream.AppState.Ecto do
   end
 
   @impl true
+  def get_leases_by_worker(app_name, stream_name, lease_owner, opts) do
+    repo = Keyword.get(opts, :repo)
+
+    %{
+      lease_owner: lease_owner,
+      app_name: app_name,
+      stream_name: stream_name
+    }
+    |> ShardLeases.get_shard_leases(repo)
+  end
+
+  @impl true
   def renew_lease(
         app_name,
         stream_name,

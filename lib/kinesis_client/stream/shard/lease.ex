@@ -108,12 +108,15 @@ defmodule KinesisClient.Stream.Shard.Lease do
     end
   end
 
-  defp take_or_renew_lease(shard_lease, %{lease_expiry: lease_expiry} = state) do
+  defp take_or_renew_lease(
+         shard_lease,
+         %{lease_expiry: lease_expiry, lease_count_increment_time: lcit} = state
+       ) do
     cond do
       shard_lease.lease_owner == state.lease_owner and state.lease_holder ->
         renew_lease(shard_lease, state)
 
-      current_time() - state.lease_count_increment_time > lease_expiry ->
+      current_time() - lcit > lease_expiry * total_number_of_leases(state) ->
         take_lease(shard_lease, state)
 
       true ->
@@ -258,5 +261,18 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
   defp current_time do
     System.monotonic_time(:millisecond)
+  end
+
+  defp total_number_of_leases(state) do
+    AppState.get_leases_by_worker(
+      state.app_name,
+      state.stream_name,
+      state.lease_owner,
+      state.app_state_opts
+    )
+    |> case do
+      [] -> 0
+      leases -> length(leases)
+    end
   end
 end
