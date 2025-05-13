@@ -58,8 +58,6 @@ defmodule KinesisClient.Stream.Shard.Lease do
       pipeline: Keyword.get(opts, :pipeline, Pipeline)
     }
 
-    Process.send_after(self(), :take_or_renew_lease, state.renew_interval)
-
     Logger.info("Initializing KinesisClient.Stream.Lease: #{inspect(state)}")
 
     {:ok, state, {:continue, :initialize}}
@@ -75,9 +73,19 @@ defmodule KinesisClient.Stream.Shard.Lease do
               "[app_name: #{state.app_name}, shard_id: #{state.shard_id}]"
           )
 
-          create_lease(state)
+          if total_number_of_leases(state) == 1 do
+            Process.send_after(self(), :take_or_renew_lease, state.renew_interval)
+
+            create_lease(state)
+          else
+            Process.send_after(self(), :create_lease, state.renew_interval)
+
+            state
+          end
 
         s ->
+          Process.send_after(self(), :take_or_renew_lease, state.renew_interval)
+
           take_or_renew_lease(s, state)
       end
 
@@ -86,6 +94,21 @@ defmodule KinesisClient.Stream.Shard.Lease do
     end
 
     notify({:initialized, new_state}, state)
+
+    {:noreply, new_state}
+  end
+
+  @impl GenServer
+  def handle_info(:create_lease, state) do
+    Process.send_after(self(), :take_or_renew_lease, state.renew_interval)
+
+    new_state = create_lease(state)
+
+    if new_state.lease_holder do
+      :ok = state.pipeline.start(state)
+    end
+
+    notify({:lease_created, new_state}, state)
 
     {:noreply, new_state}
   end
