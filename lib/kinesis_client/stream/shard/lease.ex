@@ -13,6 +13,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
   # The amount of time that must have elapsed since the least_count was incremented in order to
   # consider the lease expired.
   @default_lease_expiry 45_001
+  @default_renewal_limit 10
   @no_limit -1
 
   def start_link(opts) do
@@ -51,7 +52,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
       app_state_opts: Keyword.get(opts, :app_state_opts, []),
       renew_interval: Keyword.get(opts, :renew_interval, @default_renew_interval),
       lease_expiry: Keyword.get(opts, :lease_expiry, @default_lease_expiry),
-      lease_renewal_limit: Keyword.get(opts, :lease_renewal_limit, @no_limit),
+      lease_renewal_limit: Keyword.get(opts, :lease_renewal_limit, @default_renewal_limit),
       spread_lease: Keyword.get(opts, :spread_lease, false),
       lease_renewal_count: Keyword.get(opts, :lease_renewal_count, 0),
       lease_holder: Keyword.get(opts, :lease_holder, false),
@@ -253,12 +254,14 @@ defmodule KinesisClient.Stream.Shard.Lease do
            opts
          ) do
       {:ok, ^expected} ->
-        state = %{
-          state
-          | lease_holder: true,
-            lease_count: expected,
-            lease_count_increment_time: current_time()
-        }
+        state =
+          %{
+            state
+            | lease_holder: true,
+              lease_count: expected,
+              lease_count_increment_time: current_time()
+          }
+          |> set_lease_renewal_limit()
 
         notify({:lease_taken, state}, state)
         :ok = Pipeline.start(state)
@@ -300,6 +303,20 @@ defmodule KinesisClient.Stream.Shard.Lease do
     |> case do
       [] -> 1
       leases -> length(leases) + 1
+    end
+  end
+
+  defp set_lease_renewal_limit(state) do
+    AppState.get_leases_by_worker(
+      state.app_name,
+      state.stream_name,
+      state.lease_owner,
+      state.app_state_opts
+    )
+    |> length()
+    |> case do
+      1 -> %{state | lease_renewal_limit: @no_limit}
+      _ -> state
     end
   end
 end
