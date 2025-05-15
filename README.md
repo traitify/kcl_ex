@@ -37,6 +37,8 @@ opts = [
   ],
   # optional to limit the amount of times a lease can be renewed
   lease_renewal_limit: 10,
+  # optional to spread the shard leases across nodes
+  spread_lease: true,
   processors: [
     default: [
       concurrency: 1,

@@ -24,6 +24,7 @@ defmodule KinesisClient.Stream.Shard do
       |> optional_kw(:lease_expiry, Keyword.get(opts, :lease_expiry))
       |> optional_kw(:pipeline, Keyword.get(opts, :pipeline))
       |> optional_kw(:lease_renewal_limit, Keyword.get(opts, :lease_renewal_limit))
+      |> optional_kw(:spread_lease, Keyword.get(opts, :spread_lease))
 
     pipeline_opts = [
       app_state_opts: opts[:app_state_opts],

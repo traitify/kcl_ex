@@ -34,6 +34,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
     :lease_expiry,
     :lease_holder,
     :lease_renewal_limit,
+    :spread_lease,
     :lease_renewal_count,
     :pipeline
   ]
@@ -51,6 +52,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
       renew_interval: Keyword.get(opts, :renew_interval, @default_renew_interval),
       lease_expiry: Keyword.get(opts, :lease_expiry, @default_lease_expiry),
       lease_renewal_limit: Keyword.get(opts, :lease_renewal_limit, @no_limit),
+      spread_lease: Keyword.get(opts, :spread_lease, false),
       lease_renewal_count: Keyword.get(opts, :lease_renewal_count, 0),
       lease_holder: Keyword.get(opts, :lease_holder, false),
       lease_count_increment_time: current_time(),
@@ -285,6 +287,8 @@ defmodule KinesisClient.Stream.Shard.Lease do
   defp current_time do
     System.monotonic_time(:millisecond)
   end
+
+  defp total_number_of_leases(%{spread_lease: false}), do: 1
 
   defp total_number_of_leases(state) do
     AppState.get_leases_by_worker(
