@@ -34,7 +34,7 @@ defmodule KinesisClient.Stream do
   def init(opts) do
     stream_name = get_stream_name(opts)
     app_name = get_app_name(opts)
-    worker_ref = "worker-#{:rand.uniform(10_000)}"
+    worker_ref = "#{stream_name}-worker-#{:rand.uniform(10_000)}"
     {shard_supervisor_spec, shard_supervisor_name} = get_shard_supervisor(opts)
     coordinator_name = get_coordinator_name(opts)
     shard_consumer = get_shard_consumer(opts)
@@ -53,6 +53,7 @@ defmodule KinesisClient.Stream do
       |> optional_kw(:lease_renew_interval, Keyword.get(opts, :lease_renew_interval))
       |> optional_kw(:lease_expiry, Keyword.get(opts, :lease_expiry))
       |> optional_kw(:lease_renewal_limit, Keyword.get(opts, :lease_renewal_limit))
+      |> optional_kw(:spread_lease, Keyword.get(opts, :spread_lease))
 
     coordinator_args = [
       name: coordinator_name,

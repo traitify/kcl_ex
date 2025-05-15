@@ -64,6 +64,9 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
       stub(AppStateMock, :get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
         shard_lease
       end)
+      |> stub(:get_leases_by_worker, fn _in_app_name, _in_stream_name, _lease_owner, _ ->
+        [shard_lease]
+      end)
 
       {:ok, pid} = start_supervised({Lease, lease_opts})
 
@@ -115,6 +118,9 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
     |> stub(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
       shard_lease
     end)
+    |> stub(:get_leases_by_worker, fn _in_app_name, _in_stream_name, _lease_owner, _ ->
+      [shard_lease]
+    end)
     |> expect(:take_lease, fn app_name, stream_name, shard_id, new_owner, lc, _opts ->
       assert app_name == lease_opts[:app_name]
       assert stream_name == lease_opts[:stream_name]
@@ -146,6 +152,9 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
 
     stub(AppStateMock, :get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
       shard_lease
+    end)
+    |> stub(:get_leases_by_worker, fn _in_app_name, _in_stream_name, _lease_owner, _ ->
+      [shard_lease]
     end)
 
     {:ok, _pid} = start_supervised({Lease, lease_opts})

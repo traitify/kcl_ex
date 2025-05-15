@@ -14,6 +14,9 @@ defmodule KinesisClient.Stream.AppState do
   def get_lease(app_name, stream_name, shard_id, opts \\ []),
     do: adapter(opts).get_lease(app_name, stream_name, shard_id, opts)
 
+  def get_leases_by_worker(app_name, stream_name, lease_owner, opts \\ []),
+    do: adapter(opts).get_leases_by_worker(app_name, stream_name, lease_owner, opts)
+
   @doc """
   Persists a new ShardInfo record. Returns an error if there is already a record for that `shard_id`
   """

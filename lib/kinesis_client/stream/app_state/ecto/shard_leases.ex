@@ -1,5 +1,6 @@
 defmodule KinesisClient.Stream.AppState.Ecto.ShardLeases do
-  alias KinesisClient.Stream.AppState.Ecto.ShardLease
+  alias KinesisClient.Stream.AppState.Ecto.ShardLease, as: ShardLeaseEcto
+  alias KinesisClient.Stream.AppState.ShardLease
 
   import Ecto.Query
 
@@ -9,8 +10,8 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLeases do
         %{shard_id: _shard_id, app_name: _app_name, stream_name: _stream_name} = params,
         repo
       ) do
-    ShardLease.query()
-    |> ShardLease.build_get_query(params)
+    ShardLeaseEcto.query()
+    |> ShardLeaseEcto.build_get_query(params)
     |> repo.one()
     |> case do
       nil -> {:error, :not_found}
@@ -20,18 +21,25 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLeases do
 
   def get_shard_lease(_params, _repo), do: {:error, :missing_required_fields}
 
+  @spec get_shard_leases(any(), atom()) :: [] | [ShardLease.t()]
+  def get_shard_leases(params, repo) do
+    ShardLeaseEcto.query()
+    |> ShardLeaseEcto.build_get_query(params)
+    |> repo.all()
+  end
+
   @spec insert_shard_lease(map, Ecto.Repo.t()) ::
           {:error, Ecto.Changeset.t()} | {:ok, ShardLease.t()}
   def insert_shard_lease(attrs, repo) do
-    %ShardLease{}
-    |> ShardLease.changeset(attrs)
+    %ShardLeaseEcto{}
+    |> ShardLeaseEcto.changeset(attrs)
     |> repo.insert()
   end
 
   @spec update_shard_lease(ShardLease.t(), Ecto.Repo.t(), list) ::
           {:error, :update_unsuccessful} | {:ok, ShardLease.t()}
   def update_shard_lease(shard_lease, repo, change) do
-    ShardLease
+    ShardLeaseEcto
     |> build_where_clause(shard_lease)
     |> maybe_take_lease(change)
     |> select([sl], sl)
