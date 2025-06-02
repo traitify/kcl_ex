@@ -60,6 +60,11 @@ KinesisClient.Stream.start_link(opts)
 `MyShardConsumer` needs to implement the `Broadway` behaviour. You will want to
 start the `KinesisClient.Stream` in your application's supervision tree.
 
+## partition_by option
+
+If you want to include the partition_by option to the Broadway pipeline 
+then you need to implement a partition_by/1 function in the consumer `MyShardConsumer`.
+
 
 ## Things to keep in mind...
 

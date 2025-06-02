@@ -46,18 +46,18 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
       |> Keyword.get(:pipeline_context, %{})
       |> Map.put(:shard_consumer, opts[:shard_consumer])
 
-    pipeline_opts = [
-      name: register_name(__MODULE__, opts[:app_name], opts[:stream_name], [opts[:shard_id]]),
-      producer: [
-        module: {Producer, producer_opts},
-        concurrency: 1
-      ],
-      context: pipeline_context,
-      processors: processor_opts,
-      batchers: batcher_opts
-    ]
-
-    pipeline_opts = optional_kw(pipeline_opts, :partition_by, Keyword.get(opts, :partition_by))
+    pipeline_opts =
+      [
+        name: register_name(__MODULE__, opts[:app_name], opts[:stream_name], [opts[:shard_id]]),
+        producer: [
+          module: {Producer, producer_opts},
+          concurrency: 1
+        ],
+        context: pipeline_context,
+        processors: processor_opts,
+        batchers: batcher_opts
+      ]
+      |> partition_by(opts)
 
     Broadway.start_link(__MODULE__, pipeline_opts)
   end
@@ -109,6 +109,17 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
   end
 
   @impl Broadway
+  def prepare_messages(messages, ctx) do
+    module = Map.get(ctx, :shard_consumer)
+
+    if function_exported?(module, :prepare_messages, 2) do
+      module.prepare_messages(messages, ctx)
+    else
+      messages
+    end
+  end
+
+  @impl Broadway
   def handle_message(processor, msg, ctx) do
     module = Map.get(ctx, :shard_consumer)
     module.handle_message(processor, msg, ctx)
@@ -126,5 +137,17 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
     module = Map.get(context, :shard_consumer)
 
     module.handle_failed(messages, context)
+  end
+
+  defp partition_by(pipeline_opts, opts) do
+    shard_consumer =
+      opts[:shard_consumer]
+      |> Code.ensure_loaded!()
+
+    if function_exported?(shard_consumer, :partition_by, 1) do
+      Keyword.put(pipeline_opts, :partition_by, &shard_consumer.partition_by/1)
+    else
+      pipeline_opts
+    end
   end
 end

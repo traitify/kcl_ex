@@ -27,7 +27,6 @@ defmodule KinesisClient.Stream.Shard.LeaseTest do
 
     assert_receive {:initialized, lease_state}, 1_000
 
-    inspect(lease_state, label: "lease_state")
     assert lease_state.lease_holder == true
     assert lease_state.lease_count == 1
 
