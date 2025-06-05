@@ -249,6 +249,7 @@ defmodule KinesisClient.Stream.CoordinatorTest do
       notify_pid: self(),
       kinesis_opts: [adapter: KinesisClient.KinesisMock],
       shard_args: [
+        shard_consumer: __MODULE__,
         app_name: app_name,
         coordinator_name: coordinator_name,
         lease_owner: worker_ref(),

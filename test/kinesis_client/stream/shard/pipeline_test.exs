@@ -71,7 +71,12 @@ defmodule KinesisClient.Stream.Shard.PipelineTest do
     stream_name = "pipeline-test-stream"
     shard_id = "shard-1"
 
-    opts = [app_name: app_name, stream_name: stream_name, shard_id: shard_id]
+    opts = [
+      app_name: app_name,
+      stream_name: stream_name,
+      shard_id: shard_id,
+      shard_consumer: __MODULE__
+    ]
 
     {:ok, pid} = start_supervised({Pipeline, opts})
 
