@@ -62,6 +62,8 @@ defmodule KinesisClient.Stream do
       |> optional_kw(:lease_renewal_limit, Keyword.get(opts, :lease_renewal_limit))
       |> optional_kw(:spread_lease, Keyword.get(opts, :spread_lease))
       |> optional_kw(:poll_interval, Keyword.get(opts, :poll_interval))
+      |> optional_kw(:shard_iterator_type, Keyword.get(opts, :shard_iterator_type))
+      |> optional_kw(:timestamp, Keyword.get(opts, :timestamp))
 
     coordinator_args = [
       name: coordinator_name,
