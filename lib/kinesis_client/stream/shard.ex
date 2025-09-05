@@ -39,6 +39,8 @@ defmodule KinesisClient.Stream.Shard do
         coordinator_name: opts[:coordinator_name]
       ]
       |> optional_kw(:poll_interval, Keyword.get(opts, :poll_interval))
+      |> optional_kw(:shard_iterator_type, Keyword.get(opts, :shard_iterator_type))
+      |> optional_kw(:timestamp, Keyword.get(opts, :timestamp))
 
     Logger.metadata(
       kcl_app_name: opts[:app_name],

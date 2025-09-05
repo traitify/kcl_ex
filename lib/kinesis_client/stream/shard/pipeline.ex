@@ -7,17 +7,19 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
   alias KinesisClient.Stream.Shard.Producer
 
   def start_link(opts) do
-    producer_opts = [
-      app_name: opts[:app_name],
-      shard_id: opts[:shard_id],
-      lease_owner: opts[:lease_owner],
-      stream_name: opts[:stream_name],
-      kinesis_opts: Keyword.get(opts, :kinesis_opts, []),
-      app_state_opts: Keyword.get(opts, :app_state_opts, []),
-      poll_interval: Keyword.get(opts, :poll_interval, 5_000),
-      coordinator_name: opts[:coordinator_name],
-      status: :stopped
-    ]
+    producer_opts =
+      [
+        app_name: opts[:app_name],
+        shard_id: opts[:shard_id],
+        lease_owner: opts[:lease_owner],
+        stream_name: opts[:stream_name],
+        kinesis_opts: Keyword.get(opts, :kinesis_opts, []),
+        app_state_opts: Keyword.get(opts, :app_state_opts, []),
+        poll_interval: Keyword.get(opts, :poll_interval, 5_000),
+        coordinator_name: opts[:coordinator_name],
+        status: :stopped
+      ]
+      |> apply_shard_iterator_type(opts)
 
     min_demand = Keyword.get(opts, :min_demand, 10)
     max_demand = Keyword.get(opts, :max_demand, 20)
@@ -150,4 +152,39 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
       pipeline_opts
     end
   end
+
+  defp apply_shard_iterator_type(producer_opts, opts) do
+    opts
+    |> Keyword.get(:shard_iterator_type, :trim_horizon)
+    |> case do
+      :at_timestamp ->
+        producer_opts
+        |> Keyword.put_new(:shard_iterator_type, :at_timestamp)
+        |> apply_timestamp(opts)
+
+      shard_iterator_type ->
+        Keyword.put_new(producer_opts, :shard_iterator_type, shard_iterator_type)
+    end
+  end
+
+  defp apply_timestamp(producer_opts, opts) do
+    timestamp =
+      opts
+      |> Keyword.get(:timestamp)
+      |> case do
+        nil -> DateTime.utc_now() |> timestamp_to_unix()
+        timestamp -> timestamp_to_unix(timestamp)
+      end
+
+    producer_opts
+    |> Keyword.update!(:kinesis_opts, fn kinesis_opts ->
+      Keyword.put_new(kinesis_opts, :timestamp, timestamp)
+    end)
+  end
+
+  defp timestamp_to_unix(timestamp) when is_struct(timestamp, DateTime) do
+    DateTime.to_unix(timestamp, :second)
+  end
+
+  defp timestamp_to_unix(timestamp), do: timestamp
 end
