@@ -4,7 +4,8 @@ defmodule KinesisClient.Stream.Shard do
 
   import KinesisClient.Util
 
-  alias KinesisClient.Stream.Shard.Lease
+  # alias KinesisClient.Stream.Shard.Lease
+  alias KinesisClient.Stream.Shard.LeaseV2, as: Lease
   alias KinesisClient.Stream.Shard.Pipeline
 
   def start_link(args) do

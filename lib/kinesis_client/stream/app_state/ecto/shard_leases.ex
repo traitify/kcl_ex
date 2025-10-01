@@ -51,6 +51,35 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLeases do
     end
   end
 
+  @spec incomplete_group_by_owner(String.t(), String.t(), Ecto.Repo.t()) ::
+          [{lease_owner :: String.t(), count :: integer}]
+  def incomplete_group_by_owner(app_name, stream_name, repo) do
+    from(sl in ShardLeaseEcto,
+      where: sl.app_name == ^app_name and sl.stream_name == ^stream_name and not sl.completed,
+      group_by: sl.lease_owner,
+      select: {sl.lease_owner, count(sl.shard_id)}
+    )
+    |> repo.all()
+  end
+
+  @spec get_owner_with_most_leases(String.t(), String.t(), Ecto.Repo.t()) ::
+          owner :: String.t() | nil
+  def get_owner_with_most_leases(app_name, stream_name, repo) do
+    owner_counts = incomplete_group_by_owner(app_name, stream_name, repo)
+
+    case owner_counts do
+      [] ->
+        nil
+
+      counts ->
+        max_count = counts |> Enum.map(fn {_owner, count} -> count end) |> Enum.max()
+
+        {owner, _count} = Enum.find(counts, fn {_owner, count} -> count == max_count end)
+
+        owner
+    end
+  end
+
   defp build_where_clause(query, shard_lease) do
     query
     |> where(

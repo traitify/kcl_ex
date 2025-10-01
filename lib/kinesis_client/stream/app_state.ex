@@ -49,6 +49,18 @@ defmodule KinesisClient.Stream.AppState do
   def close_shard(app_name, stream_name, shard_id, lease_owner, opts \\ []),
     do: adapter(opts).close_shard(app_name, stream_name, shard_id, lease_owner, opts)
 
+  @doc """
+  Get all leases for a given app and stream.
+  """
+  def all_incomplete_leases(app_name, stream_name, opts \\ []),
+    do: adapter(opts).all_incomplete_leases(app_name, stream_name, opts)
+
+  @doc """
+  Get total lease counts per owner for load balancing.
+  """
+  def total_incomplete_lease_counts_by_worker(app_name, stream_name, opts \\ []),
+    do: adapter(opts).total_incomplete_lease_counts_by_worker(app_name, stream_name, opts)
+
   defp adapter(opts) do
     case Keyword.get(opts, :adapter) do
       :ecto -> KinesisClient.Stream.AppState.Ecto
