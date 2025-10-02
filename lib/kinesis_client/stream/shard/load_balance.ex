@@ -9,21 +9,6 @@ defmodule KinesisClient.Stream.Shard.LoadBalance do
   alias KinesisClient.Stream.AppState.Ecto.ShardLease
   alias KinesisClient.Stream.AppState.Ecto.ShardLeases
 
-  # def perform_load_balancing(state) do
-  #   case calculate_load_metrics(state) do
-  #     {:ok, new_state} ->
-  #       if should_rebalance?(new_state) do
-  #         attempt_lease_stealing(new_state)
-  #       else
-  #         new_state
-  #       end
-
-  #     {:error, reason} ->
-  #       Logger.warning("Failed to calculate load metrics: #{inspect(reason)}")
-  #       state
-  #   end
-  # end
-
   @spec find_worker_with_most_leases(map()) :: list(ShardLease.t())
   def find_worker_with_most_leases(state) do
     repo = Keyword.get(state.app_state_opts, :repo)

@@ -96,7 +96,9 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
               "[shard_id: #{state.shard_id}, lease_owner: #{shard_lease.lease_owner}]"
           )
 
-          load_balancing(shard_lease, state)
+          shard_lease.lease_count
+          |> set_lease_count(false, state)
+          |> then(&load_balancing(&1, state))
       end
 
     if new_state.lease_holder do
@@ -173,7 +175,7 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
     app_name
     |> AppState.create_lease(state.stream_name, state.shard_id, lease_owner, opts)
     |> case do
-      :ok -> %{state | lease_holder: true, lease_count: 1}
+      :ok -> set_lease_count(1, true, state)
       :already_exists -> %{state | lease_holder: false}
     end
   end
@@ -222,8 +224,11 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
         |> tap(fn state -> notify({:lease_taken, state}, state) end)
         |> tap(fn state -> Pipeline.start(state) end)
 
-      {:error, :lease_take_failed} ->
-        Logger.error("ShardLease: Error trying to take lease for shard #{state.shard_id}")
+      {:error, error} ->
+        Logger.error(
+          "ShardLease: Error trying to take lease for shard #{state.shard_id}, error: #{inspect(error)}"
+        )
+
         %{state | lease_holder: false, lease_count_increment_time: current_time()}
     end
   end
@@ -246,8 +251,11 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
         |> tap(fn state -> notify({:lease_stolen, state}, state) end)
         |> tap(fn state -> Pipeline.start(state) end)
 
-      {:error, :lease_take_failed} ->
-        Logger.error("ShardLease: Error trying to steal lease for #{state.shard_id}")
+      {:error, error} ->
+        Logger.error(
+          "ShardLease: Error trying to steal lease for #{state.shard_id}, error: #{inspect(error)}"
+        )
+
         state
     end
   end
@@ -286,7 +294,8 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
 
       shard_lease.lease_owner != state.lease_owner and state.lease_holder ->
         Logger.info(
-          "ShardLease: Lease lost to another worker, stopping pipeline: [shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}, current_owner: #{shard_lease.lease_owner}]"
+          "ShardLease: Lease lost to another worker, stopping pipeline: [shard_id: #{state.shard_id}, " <>
+            "lease_owner: #{state.lease_owner}, current_owner: #{shard_lease.lease_owner}]"
         )
 
         :ok = state.pipeline.stop(state)
@@ -295,7 +304,8 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
 
       current_time() - lcit > lease_expiry ->
         Logger.info(
-          "ShardLease: Lease expired, attempting to take lease: [shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}, current_owner: #{shard_lease.lease_owner}]"
+          "ShardLease: Lease expired, attempting to take lease: [shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}, " <>
+            "current_owner: #{shard_lease.lease_owner}, lease_count: #{state.lease_count}, current_lease_count: #{shard_lease.lease_count}]"
         )
 
         take_shard_lease(state)
@@ -303,7 +313,8 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
       true ->
         if shard_lease.lease_count != state.lease_count do
           Logger.info(
-            "ShardLease: Set lease count to match AppState record: [shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}, lease_count: #{shard_lease.lease_count}]"
+            "ShardLease: Set lease count to match AppState record: [shard_id: #{state.shard_id}, " <>
+              "lease_owner: #{state.lease_owner}, lease_count: #{shard_lease.lease_count}]"
           )
 
           set_lease_count(shard_lease.lease_count, false, state)
@@ -324,14 +335,16 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
     case shard_lease.lease_owner != state.lease_owner do
       true ->
         Logger.info(
-          "ShardLease: Current worker does not own the lease, attempting to steal from overloaded worker: [shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}, current_owner: #{shard_lease.lease_owner}]"
+          "ShardLease: Current worker does not own the lease, attempting to steal from overloaded worker: [shard_id: #{state.shard_id}, " <>
+            "lease_owner: #{state.lease_owner}, current_owner: #{shard_lease.lease_owner}]"
         )
 
         steal_lease_from_overloaded_worker(state)
 
       false ->
         Logger.info(
-          "ShardLease: Current worker already owns the lease, no action needed: [shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}]"
+          "ShardLease: Current worker already owns the lease, no action needed: [shard_id: #{state.shard_id}, " <>
+            "lease_owner: #{state.lease_owner}, current_owner: #{shard_lease.lease_owner}]"
         )
 
         state
@@ -360,7 +373,8 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
 
           shard_lease ->
             Logger.info(
-              "ShardLease: Attempting to steal lease for shard #{state.shard_id}, current_owner: #{shard_lease.lease_owner}"
+              "ShardLease: Attempting to steal lease for shard #{state.shard_id} [lease_owner: #{state.lease_owner}, " <>
+                "current_owner: #{shard_lease.lease_owner}, lease_count: #{state.lease_count}, current_lease_count: #{shard_lease.lease_count}]"
             )
 
             steal_shard_lease(state)
