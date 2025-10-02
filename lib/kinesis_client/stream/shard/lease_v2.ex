@@ -98,7 +98,7 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
 
           shard_lease.lease_count
           |> set_lease_count(false, state)
-          |> then(&load_balancing(&1, state))
+          |> then(&load_balancing(shard_lease, &1))
       end
 
     if new_state.lease_holder do
