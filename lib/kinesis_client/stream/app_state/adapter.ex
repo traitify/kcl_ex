@@ -90,5 +90,5 @@ defmodule KinesisClient.Stream.AppState.Adapter do
               stream_name :: String.t(),
               opts :: keyword
             ) ::
-              String.t() | nil
+              list(ShardLease.t())
 end

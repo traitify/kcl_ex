@@ -206,7 +206,7 @@ defmodule KinesisClient.Stream.AppState.Dynamo do
       "lease_owner_with_most_leases/3 is not currently implemented for DynamoDB. Please implement the callback if you want to use DynamoDB."
     )
 
-    nil
+    []
   end
 
   @impl true
