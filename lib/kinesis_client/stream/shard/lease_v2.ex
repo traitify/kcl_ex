@@ -305,8 +305,9 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
 
       current_time() - lcit > lease_expiry ->
         Logger.info(
-          "ShardLease: Lease expired, attempting to take lease: [shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}, " <>
-            "current_owner: #{shard_lease.lease_owner}, lease_count: #{state.lease_count}, current_lease_count: #{shard_lease.lease_count}]"
+          "ShardLease: Lease expired, attempting to take lease: [shard_id: #{state.shard_id}, lease_holder: #{state.lease_holder}, " <>
+            "lease_count_increment_time: #{lcit}}, lease_owner: #{state.lease_owner}, lease_count: #{state.lease_count}, " <>
+            "current_owner: #{shard_lease.lease_owner}, current_lease_count: #{shard_lease.lease_count}]"
         )
 
         take_shard_lease(state)
@@ -324,8 +325,9 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
         end
         |> tap(fn state ->
           Logger.info(
-            "ShardLeaase: Lease is owned by another node [shard_id: #{state.shard_id}, " <>
-              "lease_owner: #{state.lease_owner}, lease_count: #{state.lease_count}]"
+            "ShardLease: Lease is owned by another node [shard_id: #{state.shard_id}, lease_holder: #{state.lease_holder}, " <>
+              "lease_owner: #{state.lease_owner}, lease_count: #{state.lease_count}, " <>
+              "current_owner: #{shard_lease.lease_owner}, current_lease_count: #{shard_lease.lease_count}]"
           )
         end)
         |> tap(&notify({:tracking_lease, &1}, &1))
