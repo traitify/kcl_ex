@@ -270,6 +270,7 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
         )
 
         state
+        |> tap(&notify({:all_balanced, &1}, &1))
 
       false ->
         Logger.info(
@@ -352,7 +353,9 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
   end
 
   defp steal_lease_from_overloaded_worker(state) do
-    case LoadBalance.find_worker_with_most_leases(state) do
+    state.app_name
+    |> AppState.lease_owner_with_most_leases(state.stream_name, state.app_state_opts)
+    |> case do
       [] ->
         Logger.debug(
           "ShardLease: No overloaded workers found to steal from for shard #{state.shard_id}"

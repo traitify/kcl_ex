@@ -191,6 +191,33 @@ defmodule KinesisClient.Stream.AppState.Dynamo do
     end
   end
 
+  @impl true
+  def all_incomplete_leases(_app_name, _stream_name, _opts) do
+    Logger.error(
+      "all_incomplete_leases/3 is not currently implemented for DynamoDB. Please implement the callback if you want to use DynamoDB."
+    )
+
+    []
+  end
+
+  @impl true
+  def lease_owner_with_most_leases(_app_name, _stream_name, _opts) do
+    Logger.error(
+      "lease_owner_with_most_leases/3 is not currently implemented for DynamoDB. Please implement the callback if you want to use DynamoDB."
+    )
+
+    nil
+  end
+
+  @impl true
+  def total_incomplete_lease_counts_by_worker(_app_name, _stream_name, _opts) do
+    Logger.error(
+      "total_incomplete_lease_counts_by_worker/3 is not currently implemented for DynamoDB. Please implement the callback if you want to use DynamoDB."
+    )
+
+    []
+  end
+
   defp decode_item(item) do
     Dynamo.decode_item(item, as: KinesisClient.Stream.AppState.ShardLease)
   end

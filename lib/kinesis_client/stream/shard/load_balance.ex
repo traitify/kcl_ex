@@ -29,6 +29,7 @@ defmodule KinesisClient.Stream.Shard.LoadBalance do
     end
   end
 
+  @spec calculate_load_metrics(map()) :: map()
   def calculate_load_metrics(state) do
     %{
       state
@@ -37,6 +38,7 @@ defmodule KinesisClient.Stream.Shard.LoadBalance do
     }
   end
 
+  @spec total_leases_count_by_worker(map()) :: list({String.t(), integer})
   def total_leases_count_by_worker(state) do
     state.app_name
     |> AppState.total_incomplete_lease_counts_by_worker(
@@ -53,6 +55,7 @@ defmodule KinesisClient.Stream.Shard.LoadBalance do
     end)
   end
 
+  @spec check_if_balanced?(map()) :: boolean()
   def check_if_balanced?(state) do
     state.app_name
     |> AppState.get_leases_by_worker(state.stream_name, state.lease_owner, state.app_state_opts)

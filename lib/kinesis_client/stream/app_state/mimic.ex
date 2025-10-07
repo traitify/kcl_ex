@@ -102,6 +102,14 @@ defmodule KinesisClient.Stream.AppState.Mimic do
     from.total_incomplete_lease_counts_by_worker(app_name, stream_name, opts)
   end
 
+  @impl true
+  def lease_owner_with_most_leases(app_name, stream_name, opts) do
+    {from, to} = modules(opts)
+
+    to.lease_owner_with_most_leases(app_name, stream_name, opts)
+    from.lease_owner_with_most_leases(app_name, stream_name, opts)
+  end
+
   defp modules(opts) do
     migration = Keyword.get(opts, :migration)
 

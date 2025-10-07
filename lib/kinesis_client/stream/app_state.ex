@@ -61,6 +61,12 @@ defmodule KinesisClient.Stream.AppState do
   def total_incomplete_lease_counts_by_worker(app_name, stream_name, opts \\ []),
     do: adapter(opts).total_incomplete_lease_counts_by_worker(app_name, stream_name, opts)
 
+  @doc """
+  Get lease owner that has the most leases.
+  """
+  def lease_owner_with_most_leases(app_name, stream_name, opts \\ []),
+    do: adapter(opts).lease_owner_with_most_leases(app_name, stream_name, opts)
+
   defp adapter(opts) do
     case Keyword.get(opts, :adapter) do
       :ecto -> KinesisClient.Stream.AppState.Ecto

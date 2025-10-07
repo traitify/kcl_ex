@@ -176,6 +176,13 @@ defmodule KinesisClient.Stream.AppState.Ecto do
   end
 
   @impl true
+  def lease_owner_with_most_leases(app_name, stream_name, opts) do
+    repo = Keyword.get(opts, :repo)
+
+    ShardLeases.get_owner_with_most_leases(app_name, stream_name, repo)
+  end
+
+  @impl true
   def total_incomplete_lease_counts_by_worker(app_name, stream_name, opts) do
     repo = Keyword.get(opts, :repo)
 
