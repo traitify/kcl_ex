@@ -179,7 +179,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
             "shard_id: #{state.shard_id} data: #{inspect(successful_msgs)}"
         )
 
-      {:error, _} ->
+      {:error, error} ->
         shard_lease =
           AppState.get_lease(
             state.app_name,
@@ -190,7 +190,8 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
         Logger.error(
           "Failed to update checkpoint after acknowledging #{length(successful_msgs)} messages: [app_name: #{state.app_name} " <>
-            "shard_id: #{state.shard_id} lease_owner: #{state.lease_owner} current_shard_owner: #{shard_lease.lease_owner} data: #{inspect(successful_msgs)}"
+            "shard_id: #{state.shard_id} lease_owner: #{state.lease_owner} current_shard_owner: #{shard_lease.lease_owner} " <>
+            "checkpoint: #{checkpoint} error: #{inspect(error)} data: #{inspect(successful_msgs)}"
         )
     end
 

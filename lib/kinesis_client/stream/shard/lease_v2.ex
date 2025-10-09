@@ -196,14 +196,14 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
       {:error, error} ->
         Logger.error(
           "ShardLease: Failed to renew lease, error: #{inspect(error)}, [app_name: #{app_name}, " <>
-            "shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}]"
+            "shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}], current_owner: #{shard_lease.lease_owner}"
         )
 
         state
     end
   end
 
-  defp take_shard_lease(%{app_state_opts: opts, app_name: app_name} = state) do
+  defp take_shard_lease(shard_lease, %{app_state_opts: opts, app_name: app_name} = state) do
     expected = state.lease_count + 1
 
     case AppState.take_lease(
@@ -226,14 +226,15 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
 
       {:error, error} ->
         Logger.error(
-          "ShardLease: Error trying to take lease for shard #{state.shard_id}, error: #{inspect(error)}"
+          "ShardLease: Error trying to take lease for shard #{state.shard_id}, lease_owner: #{state.lease_owner}, " <>
+            "current_owner: #{shard_lease.lease_owner}, error: #{inspect(error)}"
         )
 
         %{state | lease_holder: false, lease_count_increment_time: current_time()}
     end
   end
 
-  defp steal_shard_lease(state) do
+  defp steal_shard_lease(shard_lease, state) do
     state.app_name
     |> AppState.take_lease(
       state.stream_name,
@@ -253,7 +254,8 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
 
       {:error, error} ->
         Logger.error(
-          "ShardLease: Error trying to steal lease for #{state.shard_id}, error: #{inspect(error)}"
+          "ShardLease: Error trying to steal lease for #{state.shard_id}, lease_owner: #{state.lease_owner}, " <>
+            "current_owner: #{shard_lease.lease_owner}, error: #{inspect(error)}"
         )
 
         state
@@ -310,7 +312,7 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
             "current_owner: #{shard_lease.lease_owner}, current_lease_count: #{shard_lease.lease_count}]"
         )
 
-        take_shard_lease(state)
+        take_shard_lease(shard_lease, state)
 
       true ->
         if shard_lease.lease_count != state.lease_count do
@@ -382,7 +384,7 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
                 "current_owner: #{shard_lease.lease_owner}, lease_count: #{state.lease_count}, current_lease_count: #{shard_lease.lease_count}]"
             )
 
-            steal_shard_lease(state)
+            steal_shard_lease(shard_lease, state)
         end
     end
   end

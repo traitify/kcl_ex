@@ -17,6 +17,8 @@ defmodule KinesisClient.Stream.AppState.Ecto do
     {UpdateShardLeasePrimaryKey.version(), UpdateShardLeasePrimaryKey}
   ]
 
+  require Logger
+
   @impl true
   def initialize(app_name, opts) do
     with {:ok, repo} <- get_repo(opts),
@@ -95,7 +97,12 @@ defmodule KinesisClient.Stream.AppState.Ecto do
          {:ok, _} <- ShardLeases.update_shard_lease(shard_lease, repo, lease_count: updated_count) do
       {:ok, updated_count}
     else
-      {:error, _} -> {:error, :lease_renew_failed}
+      {:error, error} ->
+        Logger.error(
+          "KinesisClient: Error trying to renew lease for #{shard_id}: #{inspect(error)}"
+        )
+
+        {:error, :lease_renew_failed}
     end
   end
 
@@ -121,7 +128,10 @@ defmodule KinesisClient.Stream.AppState.Ecto do
            ) do
       {:ok, updated_count}
     else
-      {:error, _} -> {:error, :lease_take_failed}
+      {:error, error} ->
+        Logger.error("KinesisClient: Error trying to take lease for #{shard_id}: #{inspect(error)}")
+
+        {:error, :lease_take_failed}
     end
   end
 
@@ -140,7 +150,12 @@ defmodule KinesisClient.Stream.AppState.Ecto do
          {:ok, _} <- ShardLeases.update_shard_lease(shard_lease, repo, checkpoint: checkpoint) do
       :ok
     else
-      {:error, _} -> {:error, :update_checkpoint_failed}
+      {:error, error} ->
+        Logger.error(
+          "KinesisClient: Error trying to update checkpoint for #{shard_id}: #{inspect(error)}"
+        )
+
+        {:error, :update_checkpoint_failed}
     end
   end
 
