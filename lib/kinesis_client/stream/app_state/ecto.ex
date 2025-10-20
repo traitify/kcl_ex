@@ -17,6 +17,8 @@ defmodule KinesisClient.Stream.AppState.Ecto do
     {UpdateShardLeasePrimaryKey.version(), UpdateShardLeasePrimaryKey}
   ]
 
+  require Logger
+
   @impl true
   def initialize(app_name, opts) do
     with {:ok, repo} <- get_repo(opts),
@@ -95,7 +97,12 @@ defmodule KinesisClient.Stream.AppState.Ecto do
          {:ok, _} <- ShardLeases.update_shard_lease(shard_lease, repo, lease_count: updated_count) do
       {:ok, updated_count}
     else
-      {:error, _} -> {:error, :lease_renew_failed}
+      {:error, error} ->
+        Logger.error(
+          "KinesisClient: Error trying to renew lease for #{shard_id}: #{inspect(error)}"
+        )
+
+        {:error, :lease_renew_failed}
     end
   end
 
@@ -121,7 +128,10 @@ defmodule KinesisClient.Stream.AppState.Ecto do
            ) do
       {:ok, updated_count}
     else
-      {:error, _} -> {:error, :lease_take_failed}
+      {:error, error} ->
+        Logger.error("KinesisClient: Error trying to take lease for #{shard_id}: #{inspect(error)}")
+
+        {:error, :lease_take_failed}
     end
   end
 
@@ -140,7 +150,12 @@ defmodule KinesisClient.Stream.AppState.Ecto do
          {:ok, _} <- ShardLeases.update_shard_lease(shard_lease, repo, checkpoint: checkpoint) do
       :ok
     else
-      {:error, _} -> {:error, :update_checkpoint_failed}
+      {:error, error} ->
+        Logger.error(
+          "KinesisClient: Error trying to update checkpoint for #{shard_id}: #{inspect(error)}"
+        )
+
+        {:error, :update_checkpoint_failed}
     end
   end
 
@@ -161,6 +176,40 @@ defmodule KinesisClient.Stream.AppState.Ecto do
     else
       {:error, _} -> {:error, :close_shard_failed}
     end
+  end
+
+  @impl true
+  def all_incomplete_leases(app_name, stream_name, opts) do
+    repo = Keyword.get(opts, :repo)
+
+    %{
+      app_name: app_name,
+      stream_name: stream_name,
+      completed: false
+    }
+    |> ShardLeases.get_shard_leases(repo)
+  end
+
+  @impl true
+  def lease_owner_with_most_leases(app_name, stream_name, opts) do
+    repo = Keyword.get(opts, :repo)
+
+    app_name
+    |> ShardLeases.get_owner_with_most_leases(stream_name, repo)
+    |> case do
+      nil ->
+        []
+
+      worker ->
+        get_leases_by_worker(app_name, stream_name, worker, opts)
+    end
+  end
+
+  @impl true
+  def total_incomplete_lease_counts_by_worker(app_name, stream_name, opts) do
+    repo = Keyword.get(opts, :repo)
+
+    ShardLeases.incomplete_group_by_owner(app_name, stream_name, repo)
   end
 
   def create_lease(attrs, opts) when is_map(attrs) do

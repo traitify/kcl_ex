@@ -162,22 +162,38 @@ defmodule KinesisClient.Stream.Shard.Producer do
   def handle_info({:ack, _ref, successful_msgs, []}, state) do
     %{metadata: %{"SequenceNumber" => checkpoint}} = successful_msgs |> Enum.reverse() |> hd()
 
-    :ok =
-      AppState.update_checkpoint(
-        state.app_name,
-        state.stream_name,
-        state.shard_id,
-        state.lease_owner,
-        checkpoint,
-        state.app_state_opts
-      )
-
-    notify({:acked, %{checkpoint: checkpoint, success: successful_msgs, failed: []}}, state)
-
-    Logger.info(
-      "Acknowledged #{length(successful_msgs)} messages: [app_name: #{state.app_name} " <>
-        "shard_id: #{state.shard_id} data: #{inspect(successful_msgs)}"
+    state.app_name
+    |> AppState.update_checkpoint(
+      state.stream_name,
+      state.shard_id,
+      state.lease_owner,
+      checkpoint,
+      state.app_state_opts
     )
+    |> case do
+      :ok ->
+        notify({:acked, %{checkpoint: checkpoint, success: successful_msgs, failed: []}}, state)
+
+        Logger.info(
+          "Acknowledged #{length(successful_msgs)} messages: [app_name: #{state.app_name} " <>
+            "shard_id: #{state.shard_id} data: #{inspect(successful_msgs)}"
+        )
+
+      {:error, error} ->
+        shard_lease =
+          AppState.get_lease(
+            state.app_name,
+            state.stream_name,
+            state.shard_id,
+            state.app_state_opts
+          )
+
+        Logger.error(
+          "Failed to update checkpoint after acknowledging #{length(successful_msgs)} messages: [app_name: #{state.app_name} " <>
+            "shard_id: #{state.shard_id} lease_owner: #{state.lease_owner} current_shard_owner: #{shard_lease.lease_owner} " <>
+            "checkpoint: #{checkpoint} error: #{inspect(error)} data: #{inspect(successful_msgs)}"
+        )
+    end
 
     state =
       state.status

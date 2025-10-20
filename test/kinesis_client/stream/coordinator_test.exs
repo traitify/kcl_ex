@@ -149,9 +149,9 @@ defmodule KinesisClient.Stream.CoordinatorTest do
     assert Process.alive?(pid_1) == true
 
     refute_receive {:shard_started, %{pid: _, shard_id: "shardId-000000000002"}}, 200
-    assert Process.alive?(pid_0) == true
+    assert Process.alive?(pid_0) == false
     refute_receive {:shard_started, %{pid: _, shard_id: "shardId-000000000003"}}, 200
-    assert Process.alive?(pid_1) == true
+    assert Process.alive?(pid_1) == false
 
     assert Enum.empty?(shards) == false
   end

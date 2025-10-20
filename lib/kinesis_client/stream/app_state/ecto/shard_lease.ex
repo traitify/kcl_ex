@@ -5,6 +5,8 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLease do
   import Ecto.Changeset
   import Ecto.Query
 
+  @type t :: %__MODULE__{}
+
   @fields [:shard_id, :app_name, :stream_name, :lease_owner, :lease_count, :checkpoint, :completed]
 
   @primary_key false
@@ -58,5 +60,9 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLease do
 
   defp query_by({:lease_count, lease_count}, query) do
     where(query, [sl], sl.lease_count == ^lease_count)
+  end
+
+  defp query_by({:completed, completed}, query) do
+    where(query, [sl], sl.completed == ^completed)
   end
 end
