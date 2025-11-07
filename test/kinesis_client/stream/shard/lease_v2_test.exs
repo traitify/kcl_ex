@@ -54,7 +54,7 @@ defmodule KinesisClient.Stream.Shard.LeaseV2Test do
   end
 
   describe "when shard_lease already exists" do
-    test "and lease owner does not currently have any leases so steal one" do
+    test "and lease owner does not currently have any leases and it's all balanced so move on" do
       shard_lease_count = 12
       lease_opts = build_lease_opts()
       other_worker = lease_opts[:lease_owner]
@@ -91,9 +91,9 @@ defmodule KinesisClient.Stream.Shard.LeaseV2Test do
           {LeaseV2, build_lease_opts(shard_id: shard_lease.shard_id, lease_owner: current_worker)}
         )
 
-      assert_receive {:lease_stolen, lease_state}, 1_000
-      assert lease_state.lease_holder == true
-      assert lease_state.lease_count == shard_lease_count + 1
+      assert_receive {:all_balanced, lease_state}, 1_000
+      assert lease_state.lease_holder == false
+      assert lease_state.lease_count == shard_lease_count
       assert Process.alive?(pid)
       stop_supervised(LeaseV2)
     end
