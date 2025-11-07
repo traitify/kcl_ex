@@ -58,19 +58,6 @@ defmodule KinesisClient.Stream.Shard.LoadBalance do
   @spec check_if_balanced?(map()) :: boolean()
   def check_if_balanced?(state) do
     state.app_name
-    |> AppState.get_leases_by_worker(state.stream_name, state.lease_owner, state.app_state_opts)
-    |> length()
-    |> case do
-      0 ->
-        false
-
-      _ ->
-        all_workers_have_balanced_load?(state)
-    end
-  end
-
-  defp all_workers_have_balanced_load?(state) do
-    state.app_name
     |> AppState.total_incomplete_lease_counts_by_worker(
       state.stream_name,
       state.app_state_opts
