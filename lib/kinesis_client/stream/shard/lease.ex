@@ -135,7 +135,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
             %{state | lease_holder: false}
           end
 
-        Logger.info(
+        Logger.debug(
           "Lease is owned by another node, and could not be taken: [shard_id: #{state.shard_id}, " <>
             "lease_owner: #{state.lease_owner}, lease_count: #{state.lease_count}]"
         )
@@ -172,7 +172,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
 
   defp renew_lease(_shard_lease, %{lease_renewal_limit: limit, lease_renewal_count: count} = state)
        when count == limit do
-    Logger.info("Releasing lease: shard_id: #{state.shard_id}, worker: #{state.lease_owner}")
+    Logger.debug("Releasing lease: shard_id: #{state.shard_id}, worker: #{state.lease_owner}")
 
     %{
       state
@@ -187,7 +187,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
   defp renew_lease(shard_lease, %{app_state_opts: opts, app_name: app_name} = state) do
     expected = shard_lease.lease_count + 1
 
-    Logger.info(
+    Logger.debug(
       "Renewing lease: [app_name: #{app_name}, shard_id: #{state.shard_id}, lease_owner: " <>
         "#{state.lease_owner}]"
     )
@@ -223,7 +223,7 @@ defmodule KinesisClient.Stream.Shard.Lease do
   defp take_lease(_shard_lease, %{app_state_opts: opts, app_name: app_name} = state) do
     expected = state.lease_count + 1
 
-    Logger.info(
+    Logger.debug(
       "Attempting to take lease: [lease_owner: #{state.lease_owner}, shard_id: #{state.shard_id}]"
     )
 
