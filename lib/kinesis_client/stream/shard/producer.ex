@@ -86,7 +86,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
   def handle_demand(incoming_demand, %{demand: demand, status: :stopped} = state) do
     notify({:queuing_demand_while_stopped, incoming_demand}, state)
 
-    Logger.info(
+    Logger.debug(
       "Shard #{state.shard_id} status is stopped, demand: #{demand}, incoming demand: #{incoming_demand}"
     )
 
@@ -95,7 +95,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @impl GenStage
   def handle_demand(incoming_demand, %{demand: demand, status: :closed} = state) do
-    Logger.info(
+    Logger.debug(
       "Shard #{state.shard_id} status is closed, demand: #{demand}, incoming demand: #{incoming_demand}"
     )
 
@@ -104,7 +104,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @impl GenStage
   def handle_demand(incoming_demand, %{demand: demand} = state) do
-    Logger.info(
+    Logger.debug(
       "Shard #{state.shard_id} received incoming demand: #{incoming_demand} - state demand: #{demand}"
     )
 
@@ -113,13 +113,13 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @impl GenStage
   def handle_info(:get_records, %{poll_timer: nil} = state) do
-    Logger.info("Poll timer is nil")
+    Logger.debug("Poll timer is nil")
     {:noreply, [], state}
   end
 
   @impl GenStage
   def handle_info(:get_records, %{status: :stopped} = state) do
-    Logger.info("Shard #{state.shard_id} is stopped, not getting records")
+    Logger.debug("Shard #{state.shard_id} is stopped, not getting records")
 
     {:noreply, [], state}
   end
@@ -129,13 +129,13 @@ defmodule KinesisClient.Stream.Shard.Producer do
     notify(:poll_timer_executed, state)
 
     if is_lease_owner?(state) do
-      Logger.info(
+      Logger.debug(
         "Try to fulfill pending demand #{state.demand}: [stream_name: #{state.stream_name}, shard_id: #{state.shard_id}]"
       )
 
       get_records(%{state | poll_timer: nil})
     else
-      Logger.info(
+      Logger.debug(
         "Lease owner is different, not getting records: [stream_name: #{state.stream_name}, shard_id: #{state.shard_id}]"
       )
 
@@ -146,7 +146,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
   @impl GenStage
   def handle_info(:shard_closed, %{coordinator_name: coordinator, shard_id: shard_id} = state) do
     # just in case something goes awry, try and close the Shard in the future
-    Logger.info(
+    Logger.debug(
       "Shard #{shard_id} is closed, notifying Coordinator: [app_name: #{state.app_name}, " <>
         "stream_name: #{state.stream_name}]"
     )
@@ -174,7 +174,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
       :ok ->
         notify({:acked, %{checkpoint: checkpoint, success: successful_msgs, failed: []}}, state)
 
-        Logger.info(
+        Logger.debug(
           "Acknowledged #{length(successful_msgs)} messages: [app_name: #{state.app_name} " <>
             "shard_id: #{state.shard_id} data: #{inspect(successful_msgs)}"
         )
@@ -208,13 +208,13 @@ defmodule KinesisClient.Stream.Shard.Producer do
   @impl GenStage
   def handle_info({:ack, _ref, [], failed_msgs}, %{status: :stopped} = state) do
     if is_lease_owner?(state) do
-      Logger.info(
+      Logger.debug(
         "Shard #{state.shard_id} - Retrying #{length(failed_msgs)} failed messages - #{inspect(failed_msgs)}"
       )
 
       {:noreply, failed_msgs, state}
     else
-      Logger.info("Stop retrying because the owner of shard #{state.shard_id} has changed")
+      Logger.debug("Stop retrying because the owner of shard #{state.shard_id} has changed")
 
       {:noreply, [], state}
     end
@@ -222,7 +222,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @impl GenStage
   def handle_info({:ack, _ref, [], failed_msgs}, state) do
-    Logger.info(
+    Logger.debug(
       "Shard #{state.shard_id} - Retrying #{length(failed_msgs)} failed messages - #{inspect(failed_msgs)}"
     )
 
@@ -242,14 +242,14 @@ defmodule KinesisClient.Stream.Shard.Producer do
   @impl GenStage
   def handle_info({:ack, _ref, successful_msgs, failed_msgs}, %{status: :stopped} = state) do
     if is_lease_owner?(state) do
-      Logger.info(
+      Logger.debug(
         "Shard #{state.shard_id} - Acknowledged #{length(successful_msgs)} messages, " <>
           "Retrying #{length(failed_msgs)} failed messages - #{inspect(failed_msgs)}"
       )
 
       {:noreply, failed_msgs, state}
     else
-      Logger.info("Stop retrying because the owner of shard #{state.shard_id} has changed")
+      Logger.debug("Stop retrying because the owner of shard #{state.shard_id} has changed")
 
       {:noreply, [], state}
     end
@@ -257,7 +257,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @impl GenStage
   def handle_info({:ack, _ref, successful_msgs, failed_msgs}, state) do
-    Logger.info(
+    Logger.debug(
       "Shard #{state.shard_id} - Acknowledged #{length(successful_msgs)} messages, " <>
         "Retrying #{length(failed_msgs)} failed messages - #{inspect(failed_msgs)}"
     )
@@ -277,20 +277,20 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @impl GenStage
   def handle_info(msg, state) do
-    Logger.info("ShardConsumer.Producer got an unhandled message #{inspect(msg)}")
+    Logger.debug("ShardConsumer.Producer got an unhandled message #{inspect(msg)}")
     {:noreply, [], state}
   end
 
   @impl GenStage
   def handle_call(:start, from, state) do
-    Logger.info("Starting KinesisClient.Stream.Shard.Producer: #{inspect(state)}")
+    Logger.debug("Starting KinesisClient.Stream.Shard.Producer: #{inspect(state)}")
 
     {:noreply, records, new_state} =
       state.app_name
       |> AppState.get_lease(state.stream_name, state.shard_id, state.app_state_opts)
       |> case do
         %{completed: true} ->
-          Logger.info(
+          Logger.debug(
             "Attempting to start Producer but shard #{state.shard_id} is already completed"
           )
 
@@ -330,7 +330,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @impl GenStage
   def handle_call(:stop, _from, %{status: :closed} = state) do
-    Logger.info(
+    Logger.debug(
       "Unable to stop the Producer: #{inspect(state)} because shard #{state.shard_id} is closed"
     )
 
@@ -339,7 +339,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @impl GenStage
   def handle_call(:stop, _from, state) do
-    Logger.info("Stopping KinesisClient.Stream.Shard.Producer: #{inspect(state)}")
+    Logger.debug("Stopping KinesisClient.Stream.Shard.Producer: #{inspect(state)}")
 
     {:reply, :ok, [], %{state | status: :stopped}}
   end
@@ -353,7 +353,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
     |> get_shard_iterator()
     |> case do
       {:ok, %{"ShardIterator" => nil}} ->
-        Logger.info("Shard #{state.shard_id} has nil shard iterator")
+        Logger.debug("Shard #{state.shard_id} has nil shard iterator")
 
         {:noreply, [], state}
 
@@ -393,14 +393,16 @@ defmodule KinesisClient.Stream.Shard.Producer do
   defp get_records_with_retry(state, kinesis_opts) do
     if is_lease_owner?(state) do
       Kinesis.get_records(state.shard_iterator, kinesis_opts)
-      |> tap(&Logger.info("Shard #{state.shard_id} Kinesis get_records_with_retry: #{inspect(&1)}"))
+      |> tap(
+        &Logger.debug("Shard #{state.shard_id} Kinesis get_records_with_retry: #{inspect(&1)}")
+      )
     else
       {:ok, :lease_owner_changed}
     end
   end
 
   defp maybe_end_of_shard_reached({:ok, :lease_owner_changed}, state) do
-    Logger.info(
+    Logger.debug(
       "#{inspect(state.lease_owner)} no longer has the shard #{state.shard_id}, not getting records"
     )
 
@@ -413,7 +415,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
        ) do
     new_demand = state.demand - length(records)
     state = handle_closed_shard(%{state | status: :closed, demand: new_demand})
-    Logger.info("Shard #{state.shard_id} has reached the end of the shard")
+    Logger.debug("Shard #{state.shard_id} has reached the end of the shard")
 
     {:noreply, wrap_records(records), state}
   end
@@ -515,7 +517,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
   defp handle_closed_shard(%{status: :closed, shard_closed_timer: nil, shutdown_delay: delay} = s) do
     timer = Process.send_after(self(), :shard_closed, delay)
 
-    Logger.info("Handling closing shard #{inspect(s.shard_id)}")
+    Logger.debug("Handling closing shard #{inspect(s.shard_id)}")
 
     AppState.close_shard(s.app_name, s.stream_name, s.shard_id, s.lease_owner, s.app_state_opts)
 
@@ -529,7 +531,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
     timer = Process.send_after(self(), :shard_closed, delay)
 
-    Logger.info("Handling closing shard #{inspect(s.shard_id)} again")
+    Logger.debug("Handling closing shard #{inspect(s.shard_id)} again")
 
     AppState.close_shard(s.app_name, s.stream_name, s.shard_id, s.lease_owner, s.app_state_opts)
 
