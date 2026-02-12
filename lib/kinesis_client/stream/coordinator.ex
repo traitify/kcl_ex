@@ -96,7 +96,7 @@ defmodule KinesisClient.Stream.Coordinator do
     {ref, _} = Enum.find(shards, fn {_monitor_ref, in_shard_id} -> in_shard_id == shard_id end)
 
     Process.demonitor(ref, [:flush])
-    Logger.info("Stopping shard: #{shard_id}")
+    Logger.debug("Stopping shard: #{shard_id}")
     Shard.stop(register_name(KinesisClient.Stream.Shard, state.app_name, sn, [shard_id]))
 
     describe_stream(state)
@@ -217,7 +217,7 @@ defmodule KinesisClient.Stream.Coordinator do
         [single_parent] ->
           case get_lease(single_parent, state) do
             %{completed: true} ->
-              Logger.info("Parent shard #{single_parent} is completed so starting #{shard_id}")
+              Logger.debug("Parent shard #{single_parent} is completed so starting #{shard_id}")
 
               shard_id
               |> maybe_start_shard(state, get_lease(shard_id, state))
@@ -227,11 +227,11 @@ defmodule KinesisClient.Stream.Coordinator do
               end
 
             %{completed: false} ->
-              Logger.info("Parent shard #{single_parent} is not completed so skipping #{shard_id}")
+              Logger.debug("Parent shard #{single_parent} is not completed so skipping #{shard_id}")
               acc
 
             :not_found ->
-              Logger.info("Parent shard #{single_parent} does not exist so skipping #{shard_id}")
+              Logger.debug("Parent shard #{single_parent} does not exist so skipping #{shard_id}")
               acc
           end
 
