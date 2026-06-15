@@ -5,7 +5,7 @@ defmodule KinesisClient.Mixfile do
     [
       app: :kinesis_client,
       version: "1.1.28",
-      elixir: "~> 1.16.0-otp-26",
+      elixir: "~> 1.16",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       package: package(),
@@ -62,7 +62,10 @@ defmodule KinesisClient.Mixfile do
       {:hackney, "~> 1.9"},
       {:jason, "~> 1.1"},
       {:mix_test_watch, "~> 1.0", only: :dev, runtime: false},
-      {:mox, "~> 1.0", only: :test},
+      # Pinned to the 1.0 line: mox 1.2's nimble_ownership-based verify_on_exit!
+      # crashes in-suite for tests that start supervised processes without
+      # setting expectations. Revisit when the test setup is migrated to 1.2.
+      {:mox, "~> 1.0.0", only: :test},
       {:retry, "~> 0.14"},
       {:sobelow, "~> 0.13", only: [:dev, :test], runtime: false},
       {:styler, "~> 0.7", only: [:dev, :test], runtime: false}
