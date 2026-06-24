@@ -9,13 +9,13 @@ defmodule KinesisClient.Stream.AppState.ShardLeaseTest do
 
     assert result == %{
              "M" => %{
-               "checkpoint" => %{"NULL" => "true"},
-               "completed" => %{"BOOL" => "false"},
-               "lease_count" => %{"NULL" => "true"},
-               "lease_owner" => %{"NULL" => "true"},
-               "shard_id" => %{"NULL" => "true"},
-               "app_name" => %{"NULL" => "true"},
-               "stream_name" => %{"NULL" => "true"}
+               "checkpoint" => %{"NULL" => true},
+               "completed" => %{"BOOL" => false},
+               "lease_count" => %{"NULL" => true},
+               "lease_owner" => %{"NULL" => true},
+               "shard_id" => %{"NULL" => true},
+               "app_name" => %{"NULL" => true},
+               "stream_name" => %{"NULL" => true}
              }
            }
   end
