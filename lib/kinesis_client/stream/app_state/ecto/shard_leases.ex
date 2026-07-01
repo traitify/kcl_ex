@@ -1,4 +1,5 @@
 defmodule KinesisClient.Stream.AppState.Ecto.ShardLeases do
+  @moduledoc false
   alias KinesisClient.Stream.AppState.Ecto.ShardLease, as: ShardLeaseEcto
   alias KinesisClient.Stream.AppState.ShardLease
 
@@ -62,24 +63,10 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLeases do
     |> repo.all()
   end
 
-  @spec get_owner_with_most_leases(String.t(), String.t(), Ecto.Repo.t()) ::
-          owner :: String.t() | nil
-  def get_owner_with_most_leases(app_name, stream_name, repo) do
-    owner_counts = incomplete_group_by_owner(app_name, stream_name, repo)
-
-    case owner_counts do
-      [] ->
-        nil
-
-      counts ->
-        max_count = counts |> Enum.map(fn {_owner, count} -> count end) |> Enum.max()
-
-        {owner, _count} = Enum.find(counts, fn {_owner, count} -> count == max_count end)
-
-        owner
-    end
-  end
-
+  # Pins the row to the freshly read lease_count AND lease_owner so a
+  # concurrent renew/take between our read and this update makes the
+  # update_all match zero rows instead of clobbering the other worker's
+  # lease. This matches the Dynamo adapter's conditional expressions.
   defp build_where_clause(query, shard_lease) do
     query
     |> where(
@@ -87,7 +74,8 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLeases do
       sl.shard_id == ^shard_lease.shard_id and
         sl.app_name == ^shard_lease.app_name and
         sl.stream_name == ^shard_lease.stream_name and
-        sl.lease_count == ^shard_lease.lease_count
+        sl.lease_count == ^shard_lease.lease_count and
+        sl.lease_owner == ^shard_lease.lease_owner
     )
   end
 

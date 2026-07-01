@@ -7,6 +7,7 @@ defmodule KinesisClient.Stream do
   import KinesisClient.Util
 
   alias KinesisClient.Stream.Coordinator
+  alias KinesisClient.Stream.Rebalancer
 
   require Logger
 
@@ -26,6 +27,11 @@ defmodule KinesisClient.Stream do
     * `:lease_expiry`(optional) - The length of time in milliseconds that least lasts for. If a
       lease is not renewed within this time frame, then that lease is considered expired and can be
       taken by another process.
+    * `:rebalance_interval`(optional) - How often (in milliseconds) this worker checks whether
+      leases are spread evenly across workers and steals one from an overloaded worker if not.
+      The interval is jittered +/- 25%. Defaults to 6,000.
+    * `:max_leases_to_steal`(optional) - The maximum number of leases to steal per rebalance
+      check. Defaults to 1.
   """
   def start_link(opts) do
     Supervisor.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -61,9 +67,18 @@ defmodule KinesisClient.Stream do
       |> optional_kw(:lease_expiry, Keyword.get(opts, :lease_expiry))
       |> optional_kw(:spread_lease, Keyword.get(opts, :spread_lease))
       |> optional_kw(:poll_interval, Keyword.get(opts, :poll_interval))
-      |> optional_kw(:rebalance_interval, Keyword.get(opts, :rebalance_interval))
       |> optional_kw(:shard_iterator_type, Keyword.get(opts, :shard_iterator_type))
       |> optional_kw(:timestamp, Keyword.get(opts, :timestamp))
+
+    rebalancer_args =
+      [
+        app_name: app_name,
+        stream_name: stream_name,
+        lease_owner: worker_ref,
+        app_state_opts: Keyword.get(opts, :app_state_opts, [])
+      ]
+      |> optional_kw(:rebalance_interval, Keyword.get(opts, :rebalance_interval))
+      |> optional_kw(:max_leases_to_steal, Keyword.get(opts, :max_leases_to_steal))
 
     coordinator_args = [
       name: coordinator_name,
@@ -77,7 +92,8 @@ defmodule KinesisClient.Stream do
 
     children = [
       shard_supervisor_spec,
-      {Coordinator, coordinator_args}
+      {Coordinator, coordinator_args},
+      {Rebalancer, rebalancer_args}
     ]
 
     Logger.info(

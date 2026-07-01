@@ -3,4 +3,8 @@ defmodule KinesisClient.TestPipeline do
   def start(_opts) do
     :ok
   end
+
+  def stop(_opts) do
+    :ok
+  end
 end

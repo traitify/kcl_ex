@@ -1,108 +1,64 @@
 defmodule KinesisClient.Stream.Shard.LoadBalance do
   @moduledoc """
-  This module will implement the load balancing logic for Kinesis shard leases.
-  It will provide functions to distribute shard leases evenly across workers,
-  detect overloaded workers, and facilitate lease stealing.
+  Pure decision logic for balancing shard leases across workers.
+
+  Given the incomplete-lease counts per worker, decides whether the current
+  worker should steal a lease from an overloaded worker. Fetching the counts
+  and executing the steal are the caller's concern (see
+  `KinesisClient.Stream.Rebalancer`).
   """
 
-  alias KinesisClient.Stream.AppState
-  alias KinesisClient.Stream.AppState.Ecto.ShardLease
-  alias KinesisClient.Stream.AppState.Ecto.ShardLeases
+  @doc """
+  Decides whether `lease_owner` should steal a lease.
 
-  @spec find_worker_with_most_leases(map()) :: list(ShardLease.t())
-  def find_worker_with_most_leases(state) do
-    repo = Keyword.get(state.app_state_opts, :repo)
+  Returns `{:steal_from, victim}` when `lease_owner` holds less than its share
+  of the leases (`ceil(total_leases / total_workers)`) and the most loaded
+  worker leads it by more than one lease, so a steal moves the distribution
+  closer to even instead of flipping the imbalance around. Returns `:balanced`
+  otherwise.
 
-    state.app_name
-    |> ShardLeases.get_owner_with_most_leases(state.stream_name, repo)
+  `lease_owner` is counted as a worker even when it holds no leases and is
+  therefore absent from the grouped counts — otherwise a fresh worker would
+  look "balanced" and never claim its share of the shards.
+  """
+  @spec decide(list({String.t(), non_neg_integer()}), String.t()) ::
+          :balanced | {:steal_from, String.t()}
+  def decide(worker_counts, lease_owner) do
+    worker_counts = include_current_worker(worker_counts, lease_owner)
+    target = target_load(worker_counts)
+    {^lease_owner, my_count} = List.keyfind(worker_counts, lease_owner, 0)
+
+    worker_counts
+    |> List.keydelete(lease_owner, 0)
+    |> steal_candidate(my_count, target)
+  end
+
+  defp steal_candidate([], _my_count, _target), do: :balanced
+
+  defp steal_candidate(other_counts, my_count, target) do
+    other_counts
+    |> Enum.max_by(fn {_owner, count} -> count end)
     |> case do
-      nil ->
-        []
+      {victim, victim_count} when my_count < target and victim_count - my_count > 1 ->
+        {:steal_from, victim}
 
-      worker ->
-        AppState.get_leases_by_worker(
-          state.app_name,
-          state.stream_name,
-          worker,
-          state.app_state_opts
-        )
+      _ ->
+        :balanced
     end
   end
 
-  @spec calculate_load_metrics(map()) :: map()
-  def calculate_load_metrics(state) do
-    %{
-      state
-      | target_load: calculate_target_load(state),
-        current_load: get_current_worker_load(state)
-    }
-  end
-
-  @spec total_leases_count_by_worker(map()) :: list({String.t(), integer})
-  def total_leases_count_by_worker(state) do
-    state.app_name
-    |> AppState.total_incomplete_lease_counts_by_worker(
-      state.stream_name,
-      state.app_state_opts
-    )
-    |> then(fn worker_counts ->
-      worker_counts
-      |> Enum.find(fn {owner, _count} -> owner == state.lease_owner end)
-      |> case do
-        nil -> [worker_counts ++ {state.lease_owner, 0}]
-        _ -> worker_counts
-      end
-    end)
-  end
-
-  @spec check_if_balanced?(map()) :: boolean()
-  def check_if_balanced?(state) do
-    state.app_name
-    |> AppState.total_incomplete_lease_counts_by_worker(
-      state.stream_name,
-      state.app_state_opts
-    )
-    |> Enum.all?(fn {_owner, count} ->
-      abs(count - calculate_target_load(state)) <= 1
-    end)
-  end
-
-  defp total_workers_count(workers, current_worker) do
-    workers
-    |> Enum.find(fn {owner, _count} -> owner == current_worker end)
+  defp include_current_worker(worker_counts, lease_owner) do
+    worker_counts
+    |> List.keymember?(lease_owner, 0)
     |> case do
-      nil -> length(workers) + 1
-      _ -> length(workers)
+      true -> worker_counts
+      false -> [{lease_owner, 0} | worker_counts]
     end
   end
 
-  defp calculate_target_load(state) do
-    incomplete_leases_count =
-      AppState.all_incomplete_leases(state.app_name, state.stream_name, state.app_state_opts)
+  defp target_load(worker_counts) do
+    total_leases = worker_counts |> Enum.map(fn {_owner, count} -> count end) |> Enum.sum()
 
-    workers_count =
-      AppState.total_incomplete_lease_counts_by_worker(
-        state.app_name,
-        state.stream_name,
-        state.app_state_opts
-      )
-
-    total_shards = length(incomplete_leases_count)
-    total_workers = total_workers_count(workers_count, state.lease_owner)
-
-    if total_workers > 0, do: ceil(total_shards / total_workers), else: 0
-  end
-
-  defp get_current_worker_load(state) do
-    state.app_name
-    |> AppState.get_leases_by_worker(
-      state.stream_name,
-      state.lease_owner,
-      state.app_state_opts
-    )
-    |> case do
-      [] -> 0
-      leases -> length(leases)
-    end
+    ceil(total_leases / length(worker_counts))
   end
 end

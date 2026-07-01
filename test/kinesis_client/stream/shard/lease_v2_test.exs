@@ -4,6 +4,19 @@ defmodule KinesisClient.Stream.Shard.LeaseV2Test do
   alias KinesisClient.Stream.AppState.ShardLease
   alias KinesisClient.Stream.Shard.LeaseV2
 
+  defmodule NotifyingPipeline do
+    @moduledoc false
+    def start(state) do
+      send(state.notify, {:pipeline_started, state.shard_id})
+      :ok
+    end
+
+    def stop(state) do
+      send(state.notify, {:pipeline_stopped, state.shard_id})
+      :ok
+    end
+  end
+
   test "creates and takes AppState.ShardLease if none already exists" do
     lease_opts = build_lease_opts(pipeline: KinesisClient.TestPipeline)
 
@@ -53,169 +66,204 @@ defmodule KinesisClient.Stream.Shard.LeaseV2Test do
     stop_supervised(LeaseV2)
   end
 
-  describe "when shard_lease already exists" do
-    test "and lease owner does not currently have any leases and it's all balanced so move on" do
-      shard_lease_count = 12
-      lease_opts = build_lease_opts()
-      other_worker = lease_opts[:lease_owner]
-      shard_lease = build_shard_lease(lease_count: shard_lease_count, lease_owner: other_worker)
+  test "tracks an existing lease owned by another worker without taking it" do
+    shard_lease_count = 12
+    lease_opts = build_lease_opts()
+    shard_lease = build_shard_lease(lease_count: shard_lease_count, lease_owner: worker_ref())
+
+    stub(AppStateMock, :get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+      shard_lease
+    end)
+
+    {:ok, pid} = start_supervised({LeaseV2, lease_opts})
+
+    assert_receive {:initialized, lease_state}, 1_000
+    assert lease_state.lease_holder == false
+    assert lease_state.lease_count == shard_lease_count
+    assert Process.alive?(pid)
+    stop_supervised(LeaseV2)
+  end
+
+  test "stops the pipeline and releases lease_holder when renewal fails" do
+    current_worker = worker_ref()
+
+    lease_opts =
+      build_lease_opts(
+        lease_owner: current_worker,
+        renew_interval: 200,
+        pipeline: NotifyingPipeline
+      )
+
+    owned_shard_lease =
+      build_shard_lease(
+        lease_count: 1,
+        lease_owner: current_worker,
+        shard_id: lease_opts[:shard_id]
+      )
+
+    AppStateMock
+    |> expect(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+      :not_found
+    end)
+    |> stub(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+      owned_shard_lease
+    end)
+    |> stub(:create_lease, fn _app_name, _stream_name, _shard_id, _lease_owner, _opts ->
+      :ok
+    end)
+    |> stub(:renew_lease, fn _app_name, _stream_name, _shard_lease, _opts ->
+      {:error, :lease_renew_failed}
+    end)
+
+    {:ok, pid} = start_supervised({LeaseV2, lease_opts})
+
+    assert_receive {:initialized, lease_state}, 1_000
+    assert lease_state.lease_holder == true
+    assert_receive {:pipeline_started, _shard_id}, 1_000
+
+    assert_receive {:lease_renew_failed, lease_state}, 1_000
+    assert lease_state.lease_holder == false
+    assert_receive {:pipeline_stopped, _shard_id}, 1_000
+    assert Process.alive?(pid)
+    stop_supervised(LeaseV2)
+  end
+
+  describe ":steal_lease message" do
+    test "steals the lease from its current owner and starts the pipeline" do
       current_worker = worker_ref()
+
+      lease_opts =
+        build_lease_opts(lease_owner: current_worker, pipeline: NotifyingPipeline)
+
+      shard_lease =
+        build_shard_lease(
+          lease_count: 8,
+          lease_owner: worker_ref(),
+          shard_id: lease_opts[:shard_id]
+        )
 
       stub(AppStateMock, :get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
         shard_lease
-      end)
-      |> stub(:get_leases_by_worker, fn _in_app_name, _in_stream_name, _lease_owner, _ ->
-        []
-      end)
-      |> stub(:total_incomplete_lease_counts_by_worker, fn _app_name, _stream_name, _opts ->
-        [{other_worker, 1}]
-      end)
-      |> stub(:all_incomplete_leases, fn _app_name, _stream_name, _opts ->
-        [shard_lease]
-      end)
-      |> stub(:lease_owner_with_most_leases, fn _app_name, _stream_name, _opts ->
-        [shard_lease]
       end)
       |> stub(:take_lease, fn app_name, stream_name, shard_id, new_owner, lc, _opts ->
         assert app_name == lease_opts[:app_name]
         assert stream_name == lease_opts[:stream_name]
         assert shard_id == lease_opts[:shard_id]
         assert new_owner == current_worker
-        assert lc == 12
+        assert lc == shard_lease.lease_count
 
         {:ok, lc + 1}
-      end)
-
-      {:ok, pid} =
-        start_supervised(
-          {LeaseV2, build_lease_opts(shard_id: shard_lease.shard_id, lease_owner: current_worker)}
-        )
-
-      assert_receive {:all_balanced, lease_state}, 1_000
-      assert lease_state.lease_holder == false
-      assert lease_state.lease_count == shard_lease_count
-      assert Process.alive?(pid)
-      stop_supervised(LeaseV2)
-    end
-
-    test "and all is balanced so move on" do
-      shard_lease_count = 12
-      lease_opts = build_lease_opts()
-      current_worker = lease_opts[:lease_owner]
-      shard_lease_1 = build_shard_lease(lease_count: shard_lease_count, lease_owner: current_worker)
-      other_worker = worker_ref()
-      shard_lease_2 = build_shard_lease(lease_count: 5, lease_owner: other_worker)
-
-      stub(AppStateMock, :get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
-        shard_lease_1
-      end)
-      |> stub(:get_leases_by_worker, fn _in_app_name, _in_stream_name, _lease_owner, _ ->
-        [shard_lease_1]
-      end)
-      |> stub(:total_incomplete_lease_counts_by_worker, fn _app_name, _stream_name, _opts ->
-        [{current_worker, 1}, {worker_ref(), 1}]
-      end)
-      |> stub(:all_incomplete_leases, fn _app_name, _stream_name, _opts ->
-        [shard_lease_1, shard_lease_2]
       end)
 
       {:ok, pid} = start_supervised({LeaseV2, lease_opts})
 
-      assert_receive {:all_balanced, lease_state}, 1_000
-      assert lease_state.shard_id == shard_lease_1.shard_id
-      assert lease_state.lease_count == shard_lease_count
+      assert_receive {:initialized, lease_state}, 1_000
+      assert lease_state.lease_holder == false
+
+      send(pid, :steal_lease)
+
+      assert_receive {:lease_stolen, lease_state}, 1_000
+      assert lease_state.lease_holder == true
+      assert lease_state.lease_count == shard_lease.lease_count + 1
       assert lease_state.lease_owner == current_worker
+      assert_receive {:pipeline_started, _shard_id}, 1_000
       assert Process.alive?(pid)
       stop_supervised(LeaseV2)
     end
 
-    test "and it's not balanced so steal from overloaded worker" do
-      lease_opts = build_lease_opts()
-      worker_1 = worker_ref()
+    test "steals with the freshly read lease_count when the state count is stale" do
+      current_worker = worker_ref()
+      other_worker = worker_ref()
+      lease_opts = build_lease_opts(lease_owner: current_worker, pipeline: NotifyingPipeline)
 
-      shard_lease_1 =
-        build_shard_lease(lease_count: 12, lease_owner: worker_1, shard_id: "shard-000001")
+      # The count read at init (synced into state) is 8, but by the time the
+      # steal request arrives the owner has renewed the lease to 9. The steal
+      # must use the fresh count or the optimistic lock will always fail.
+      stale_shard_lease =
+        build_shard_lease(
+          lease_count: 8,
+          lease_owner: other_worker,
+          shard_id: lease_opts[:shard_id]
+        )
 
-      worker_2 = worker_ref()
+      fresh_shard_lease =
+        build_shard_lease(
+          lease_count: 9,
+          lease_owner: other_worker,
+          shard_id: lease_opts[:shard_id]
+        )
 
-      shard_lease_2 =
-        build_shard_lease(lease_count: 10, lease_owner: worker_2, shard_id: "shard-000002")
-
-      shard_lease_3 =
-        build_shard_lease(lease_count: 10, lease_owner: worker_2, shard_id: "shard-000003")
-
-      shard_lease_4 =
-        build_shard_lease(lease_count: 10, lease_owner: worker_2, shard_id: "shard-000004")
-
-      shard_lease_5 =
-        build_shard_lease(lease_count: 10, lease_owner: worker_2, shard_id: "shard-000005")
-
-      worker_3 = worker_ref()
-
-      shard_lease_6 =
-        build_shard_lease(lease_count: 8, lease_owner: worker_3, shard_id: "shard-000006")
-
-      shard_lease_7 =
-        build_shard_lease(lease_count: 8, lease_owner: worker_3, shard_id: "shard-000007")
-
-      shard_lease_8 =
-        build_shard_lease(lease_count: 8, lease_owner: worker_3, shard_id: "shard-000008")
-
-      shard_lease_9 =
-        build_shard_lease(lease_count: 8, lease_owner: worker_3, shard_id: "shard-000009")
-
-      stub(AppStateMock, :get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
-        shard_lease_6
+      AppStateMock
+      |> expect(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+        stale_shard_lease
       end)
-      |> stub(:get_leases_by_worker, fn _in_app_name, _in_stream_name, _lease_owner, _ ->
-        [shard_lease_1]
+      |> stub(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+        fresh_shard_lease
       end)
-      |> stub(:total_incomplete_lease_counts_by_worker, fn _app_name, _stream_name, _opts ->
-        [{worker_1, 1}, {worker_2, 4}, {worker_3, 4}]
-      end)
-      |> stub(:all_incomplete_leases, fn _app_name, _stream_name, _opts ->
-        [
-          shard_lease_1,
-          shard_lease_2,
-          shard_lease_3,
-          shard_lease_4,
-          shard_lease_5,
-          shard_lease_6,
-          shard_lease_7,
-          shard_lease_8,
-          shard_lease_9
-        ]
-      end)
-      |> stub(:lease_owner_with_most_leases, fn _app_name, _stream_name, _opts ->
-        [shard_lease_6, shard_lease_7, shard_lease_8, shard_lease_9]
-      end)
-      |> stub(:take_lease, fn app_name, stream_name, shard_id, new_owner, lc, _opts ->
-        assert app_name == lease_opts[:app_name]
-        assert stream_name == lease_opts[:stream_name]
-
-        assert shard_id in [
-                 shard_lease_6.shard_id,
-                 shard_lease_7.shard_id,
-                 shard_lease_8.shard_id,
-                 shard_lease_9.shard_id
-               ]
-
-        assert new_owner == worker_1
-        assert lc == 8
+      |> stub(:take_lease, fn _app_name, _stream_name, _shard_id, new_owner, lc, _opts ->
+        assert new_owner == current_worker
+        assert lc == fresh_shard_lease.lease_count
 
         {:ok, lc + 1}
       end)
 
-      {:ok, pid} =
-        start_supervised(
-          {LeaseV2, build_lease_opts(shard_id: shard_lease_6.shard_id, lease_owner: worker_1)}
-        )
+      {:ok, pid} = start_supervised({LeaseV2, lease_opts})
+
+      assert_receive {:initialized, lease_state}, 1_000
+      assert lease_state.lease_count == stale_shard_lease.lease_count
+
+      send(pid, :steal_lease)
 
       assert_receive {:lease_stolen, lease_state}, 1_000
       assert lease_state.lease_holder == true
-      assert lease_state.lease_count == 9
-      assert lease_state.lease_owner == worker_1
-      assert lease_state.shard_id == shard_lease_6.shard_id
+      assert lease_state.lease_count == fresh_shard_lease.lease_count + 1
+      assert Process.alive?(pid)
+      stop_supervised(LeaseV2)
+    end
+
+    test "ignores the request when already the lease holder" do
+      lease_opts = build_lease_opts(pipeline: KinesisClient.TestPipeline)
+
+      AppStateMock
+      |> stub(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+        :not_found
+      end)
+      |> stub(:create_lease, fn _app_name, _stream_name, _shard_id, _lease_owner, _opts ->
+        :ok
+      end)
+
+      {:ok, pid} = start_supervised({LeaseV2, lease_opts})
+
+      assert_receive {:initialized, %{lease_holder: true}}, 1_000
+
+      send(pid, :steal_lease)
+
+      refute_receive {:lease_stolen, _}, 200
+      assert Process.alive?(pid)
+      stop_supervised(LeaseV2)
+    end
+
+    test "ignores the request when the shard is completed" do
+      lease_opts = build_lease_opts()
+
+      shard_lease =
+        build_shard_lease(
+          lease_owner: worker_ref(),
+          shard_id: lease_opts[:shard_id],
+          completed: true
+        )
+
+      stub(AppStateMock, :get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+        shard_lease
+      end)
+
+      {:ok, pid} = start_supervised({LeaseV2, lease_opts})
+
+      assert_receive {:initialized, %{lease_holder: false}}, 1_000
+
+      send(pid, :steal_lease)
+
+      refute_receive {:lease_stolen, _}, 200
       assert Process.alive?(pid)
       stop_supervised(LeaseV2)
     end
@@ -229,15 +277,6 @@ defmodule KinesisClient.Stream.Shard.LeaseV2Test do
     AppStateMock
     |> stub(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
       shard_lease
-    end)
-    |> stub(:get_leases_by_worker, fn _in_app_name, _in_stream_name, _lease_owner, _ ->
-      [shard_lease]
-    end)
-    |> stub(:total_incomplete_lease_counts_by_worker, fn _app_name, _stream_name, _opts ->
-      [{lease_opts[:application], 1}]
-    end)
-    |> stub(:all_incomplete_leases, fn _app_name, _stream_name, _opts ->
-      [shard_lease]
     end)
     |> stub(:take_lease, fn app_name, stream_name, shard_id, new_owner, lc, _opts ->
       assert app_name == lease_opts[:app_name]
@@ -269,15 +308,6 @@ defmodule KinesisClient.Stream.Shard.LeaseV2Test do
     stub(AppStateMock, :get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
       shard_lease
     end)
-    |> stub(:get_leases_by_worker, fn _in_app_name, _in_stream_name, _lease_owner, _ ->
-      [shard_lease]
-    end)
-    |> stub(:total_incomplete_lease_counts_by_worker, fn _app_name, _stream_name, _opts ->
-      [{lease_opts[:application], 1}]
-    end)
-    |> stub(:all_incomplete_leases, fn _app_name, _stream_name, _opts ->
-      [shard_lease]
-    end)
 
     {:ok, _pid} = start_supervised({LeaseV2, lease_opts})
 
@@ -289,34 +319,6 @@ defmodule KinesisClient.Stream.Shard.LeaseV2Test do
     assert_receive {:tracking_lease, lease_state}, 5_000
     assert lease_state.lease_holder == false
     assert lease_state.lease_count == shard_lease.lease_count
-    stop_supervised(LeaseV2)
-  end
-
-  test "run load balancing" do
-    shard_lease_count = 12
-    lease_opts = build_lease_opts(rebalance_interval: 500)
-    shard_lease = build_shard_lease(lease_count: shard_lease_count)
-
-    stub(AppStateMock, :get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
-      shard_lease
-    end)
-    |> stub(:get_leases_by_worker, fn _in_app_name, _in_stream_name, _lease_owner, _ ->
-      [shard_lease]
-    end)
-    |> stub(:total_incomplete_lease_counts_by_worker, fn _app_name, _stream_name, _opts ->
-      [{lease_opts[:application], 1}]
-    end)
-    |> stub(:all_incomplete_leases, fn _app_name, _stream_name, _opts ->
-      [shard_lease]
-    end)
-
-    {:ok, pid} = start_supervised({LeaseV2, lease_opts})
-
-    assert_receive {:initialized, %{lease_count_increment_time: _lcit} = lease_state}, 1_000
-    assert lease_state.lease_holder == false
-    assert_receive {:all_balanced, lease_state}, 1_000
-    assert lease_state.lease_count == shard_lease.lease_count
-    Process.alive?(pid)
     stop_supervised(LeaseV2)
   end
 

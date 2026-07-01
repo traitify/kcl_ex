@@ -47,10 +47,11 @@ defmodule KinesisClient.Stream.AppState.Dynamo do
   end
 
   @impl true
-  def get_leases_by_worker(_app_name, _stream_name, _lease_owner, _opts) do
-    raise BadFunctionError,
-      message:
-        "get_leases_by_worker/4 is not currently implemented for DynamoDB. Please implement the callback if you want to use DynamoDB."
+  def get_leases_by_worker(app_name, _stream_name, lease_owner, _opts) do
+    scan_shard_leases(app_name,
+      filter_expression: "lease_owner = :lease_owner",
+      expression_attribute_values: [lease_owner: lease_owner]
+    )
   end
 
   @impl true
@@ -192,30 +193,29 @@ defmodule KinesisClient.Stream.AppState.Dynamo do
   end
 
   @impl true
-  def all_incomplete_leases(_app_name, _stream_name, _opts) do
-    Logger.error(
-      "all_incomplete_leases/3 is not currently implemented for DynamoDB. Please implement the callback if you want to use DynamoDB."
+  def all_incomplete_leases(app_name, _stream_name, _opts) do
+    scan_shard_leases(app_name,
+      filter_expression: "completed = :completed",
+      expression_attribute_values: [completed: false]
     )
-
-    []
   end
 
   @impl true
-  def lease_owner_with_most_leases(_app_name, _stream_name, _opts) do
-    Logger.error(
-      "lease_owner_with_most_leases/3 is not currently implemented for DynamoDB. Please implement the callback if you want to use DynamoDB."
-    )
-
-    []
+  def total_incomplete_lease_counts_by_worker(app_name, stream_name, opts) do
+    app_name
+    |> all_incomplete_leases(stream_name, opts)
+    |> Enum.frequencies_by(& &1.lease_owner)
+    |> Map.to_list()
   end
 
-  @impl true
-  def total_incomplete_lease_counts_by_worker(_app_name, _stream_name, _opts) do
-    Logger.error(
-      "total_incomplete_lease_counts_by_worker/3 is not currently implemented for DynamoDB. Please implement the callback if you want to use DynamoDB."
-    )
-
-    []
+  # Lease tables hold one row per shard, so a filtered Scan is cheap enough for
+  # the load balancing queries (this mirrors how the Java KCL reads its lease
+  # table). ExAws.stream!/1 follows LastEvaluatedKey pagination for us.
+  defp scan_shard_leases(app_name, scan_opts) do
+    app_name
+    |> Dynamo.scan(scan_opts)
+    |> ExAws.stream!()
+    |> Enum.map(&decode_item/1)
   end
 
   defp decode_item(item) do
