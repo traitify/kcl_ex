@@ -17,4 +17,8 @@ Application.put_env(:ex_aws, :kinesis,
 
 Logger.configure(level: :info)
 
+# Integration tests (e.g. DynamoTest) require a running DynamoDB and are
+# excluded by default. Run them with `mix test --include integration`.
+ExUnit.configure(exclude: [:integration])
+
 ExUnit.start()
