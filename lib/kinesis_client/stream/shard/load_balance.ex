@@ -11,13 +11,12 @@ defmodule KinesisClient.Stream.Shard.LoadBalance do
   @doc """
   Decides whether `lease_owner` should steal a lease.
 
-  Returns `{:steal_from, victim, deficit}` when `lease_owner` holds less than
-  its share of the leases (`ceil(total_leases / total_workers)`) and the most
-  loaded worker leads it by more than one lease, so a steal moves the
+  Returns `{:steal_from, victim, steal_count}` when `lease_owner` holds less
+  than its share of the leases (`ceil(total_leases / total_workers)`) and the
+  most loaded worker leads it by more than one lease, so a steal moves the
   distribution closer to even instead of flipping the imbalance around.
-  `deficit` is how many leases `lease_owner` is short of the target — the
-  caller must not steal more than that in one round, or the imbalance flips
-  to the other side and oscillates. Returns `:balanced` otherwise.
+  `steal_count` is the most the caller may take in one round and still
+  converge. Returns `:balanced` otherwise.
 
   `lease_owner` is counted as a worker even when it holds no leases and is
   therefore absent from the grouped counts — otherwise a fresh worker would
@@ -42,11 +41,20 @@ defmodule KinesisClient.Stream.Shard.LoadBalance do
     |> Enum.max_by(fn {_owner, count} -> count end)
     |> case do
       {victim, victim_count} when my_count < target and victim_count - my_count > 1 ->
-        {:steal_from, victim, target - my_count}
+        {:steal_from, victim, steal_count(my_count, victim_count, target)}
 
       _ ->
         :balanced
     end
+  end
+
+  # A steal is bounded by what this worker lacks (target - my_count) AND by
+  # half the gap to the victim: taking more than half flips the pairwise
+  # imbalance instead of settling it, and the pair trades the same leases
+  # back and forth forever (e.g. {2, 4, 4}: the deficit of 2 flips 2/4 to
+  # 4/2 every round; half the gap moves it to 3/3 and it converges).
+  defp steal_count(my_count, victim_count, target) do
+    min(target - my_count, div(victim_count - my_count, 2))
   end
 
   defp include_current_worker(worker_counts, lease_owner) do
