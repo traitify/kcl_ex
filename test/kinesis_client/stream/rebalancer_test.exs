@@ -10,11 +10,15 @@ defmodule KinesisClient.Stream.RebalancerTest do
   test "notifies :all_balanced and requests no steals when the load is balanced" do
     opts = build_rebalancer_opts()
     lease_owner = opts[:lease_owner]
+    other_worker = worker_ref()
 
-    stub(AppStateMock, :total_incomplete_lease_counts_by_worker, fn _app_name,
-                                                                    _stream_name,
-                                                                    _opts ->
-      [{lease_owner, 2}, {worker_ref(), 2}]
+    stub(AppStateMock, :all_incomplete_leases, fn _app_name, _stream_name, _opts ->
+      [
+        build_shard_lease(shard_id: "shard-000001", lease_owner: lease_owner),
+        build_shard_lease(shard_id: "shard-000002", lease_owner: lease_owner),
+        build_shard_lease(shard_id: "shard-000003", lease_owner: other_worker),
+        build_shard_lease(shard_id: "shard-000004", lease_owner: other_worker)
+      ]
     end)
 
     {:ok, pid} = start_supervised({Rebalancer, opts})
@@ -39,12 +43,7 @@ defmodule KinesisClient.Stream.RebalancerTest do
     # candidate order the steal request can only go there.
     register_lease_process(opts, "shard-000002")
 
-    AppStateMock
-    |> stub(:total_incomplete_lease_counts_by_worker, fn _app_name, _stream_name, _opts ->
-      [{victim, 4}]
-    end)
-    |> stub(:get_leases_by_worker, fn _app_name, _stream_name, in_lease_owner, _opts ->
-      assert in_lease_owner == victim
+    stub(AppStateMock, :all_incomplete_leases, fn _app_name, _stream_name, _opts ->
       victim_leases
     end)
 
@@ -63,19 +62,18 @@ defmodule KinesisClient.Stream.RebalancerTest do
     opts = build_rebalancer_opts(rebalance_interval: 600)
     victim = worker_ref()
 
+    # 4 victim leases and none of ours: a deficit of 2, but the default
+    # max_leases_to_steal of 1 caps the tick at a single steal request.
     victim_leases = [
       build_shard_lease(shard_id: "shard-000001", lease_owner: victim),
-      build_shard_lease(shard_id: "shard-000002", lease_owner: victim)
+      build_shard_lease(shard_id: "shard-000002", lease_owner: victim),
+      build_shard_lease(shard_id: "shard-000003", lease_owner: victim),
+      build_shard_lease(shard_id: "shard-000004", lease_owner: victim)
     ]
 
-    register_lease_process(opts, "shard-000001")
-    register_lease_process(opts, "shard-000002")
+    Enum.each(victim_leases, &register_lease_process(opts, &1.shard_id))
 
-    AppStateMock
-    |> stub(:total_incomplete_lease_counts_by_worker, fn _app_name, _stream_name, _opts ->
-      [{victim, 4}]
-    end)
-    |> stub(:get_leases_by_worker, fn _app_name, _stream_name, _lease_owner, _opts ->
+    stub(AppStateMock, :all_incomplete_leases, fn _app_name, _stream_name, _opts ->
       victim_leases
     end)
 
@@ -103,11 +101,7 @@ defmodule KinesisClient.Stream.RebalancerTest do
 
     Enum.each(victim_leases, &register_lease_process(opts, &1.shard_id))
 
-    AppStateMock
-    |> stub(:total_incomplete_lease_counts_by_worker, fn _app_name, _stream_name, _opts ->
-      [{victim, 4}]
-    end)
-    |> stub(:get_leases_by_worker, fn _app_name, _stream_name, _lease_owner, _opts ->
+    stub(AppStateMock, :all_incomplete_leases, fn _app_name, _stream_name, _opts ->
       victim_leases
     end)
 
@@ -120,39 +114,10 @@ defmodule KinesisClient.Stream.RebalancerTest do
     stop_supervised(Rebalancer)
   end
 
-  test "skips completed shards when picking a steal candidate" do
-    opts = build_rebalancer_opts()
-    victim = worker_ref()
-
-    victim_leases = [
-      build_shard_lease(shard_id: "shard-000001", lease_owner: victim, completed: true),
-      build_shard_lease(shard_id: "shard-000002", lease_owner: victim)
-    ]
-
-    register_lease_process(opts, "shard-000001")
-    register_lease_process(opts, "shard-000002")
-
-    AppStateMock
-    |> stub(:total_incomplete_lease_counts_by_worker, fn _app_name, _stream_name, _opts ->
-      [{victim, 4}]
-    end)
-    |> stub(:get_leases_by_worker, fn _app_name, _stream_name, _lease_owner, _opts ->
-      victim_leases
-    end)
-
-    {:ok, pid} = start_supervised({Rebalancer, opts})
-
-    assert_receive {:lease_message, "shard-000002", {:steal_lease, ^victim}}, 1_000
-    assert Process.alive?(pid)
-    stop_supervised(Rebalancer)
-  end
-
   test "survives a failing balancing query and keeps ticking" do
     opts = build_rebalancer_opts()
 
-    stub(AppStateMock, :total_incomplete_lease_counts_by_worker, fn _app_name,
-                                                                    _stream_name,
-                                                                    _opts ->
+    stub(AppStateMock, :all_incomplete_leases, fn _app_name, _stream_name, _opts ->
       raise "throttled scan"
     end)
 

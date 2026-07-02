@@ -55,12 +55,6 @@ defmodule KinesisClient.Stream.AppState do
   def all_incomplete_leases(app_name, stream_name, opts \\ []),
     do: adapter(opts).all_incomplete_leases(app_name, stream_name, opts)
 
-  @doc """
-  Get total lease counts per owner for load balancing.
-  """
-  def total_incomplete_lease_counts_by_worker(app_name, stream_name, opts \\ []),
-    do: adapter(opts).total_incomplete_lease_counts_by_worker(app_name, stream_name, opts)
-
   defp adapter(opts) do
     case Keyword.get(opts, :adapter) do
       :ecto -> KinesisClient.Stream.AppState.Ecto

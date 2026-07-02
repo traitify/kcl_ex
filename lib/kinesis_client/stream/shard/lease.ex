@@ -260,15 +260,6 @@ defmodule KinesisClient.Stream.Shard.Lease do
     end
   end
 
-  defp notify(_msg, %{notify: nil}) do
-    :ok
-  end
-
-  defp notify(msg, %{notify: notify}) do
-    send(notify, msg)
-    :ok
-  end
-
   defp current_time do
     System.monotonic_time(:millisecond)
   end

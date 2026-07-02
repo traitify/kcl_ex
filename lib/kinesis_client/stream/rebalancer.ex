@@ -84,23 +84,29 @@ defmodule KinesisClient.Stream.Rebalancer do
       {:noreply, state}
   end
 
+  # One query per tick: the incomplete leases give both the per-worker counts
+  # for the balance decision and the steal candidates, so an unbalanced tick
+  # costs no more than a balanced one.
   defp run_rebalance(state) do
-    state.app_name
-    |> AppState.total_incomplete_lease_counts_by_worker(state.stream_name, state.app_state_opts)
+    leases =
+      AppState.all_incomplete_leases(state.app_name, state.stream_name, state.app_state_opts)
+
+    leases
+    |> Enum.frequencies_by(& &1.lease_owner)
+    |> Map.to_list()
     |> LoadBalance.decide(state.lease_owner)
     |> case do
       :balanced ->
         notify({:all_balanced, state}, state)
 
       {:steal_from, victim, deficit} ->
-        steal_from(victim, deficit, state)
+        steal_from(victim, deficit, leases, state)
     end
   end
 
-  defp steal_from(victim, deficit, state) do
-    state.app_name
-    |> AppState.get_leases_by_worker(state.stream_name, victim, state.app_state_opts)
-    |> Enum.reject(& &1.completed)
+  defp steal_from(victim, deficit, leases, state) do
+    leases
+    |> Enum.filter(&(&1.lease_owner == victim))
     |> Enum.shuffle()
     |> Enum.map(&local_lease_process(&1, state))
     |> Enum.reject(&is_nil/1)
@@ -135,14 +141,5 @@ defmodule KinesisClient.Stream.Rebalancer do
   # +/- 25% so workers don't tick in lockstep and stampede the same lease.
   defp jitter(interval) do
     interval + :rand.uniform(max(div(interval, 2), 1)) - div(interval, 4)
-  end
-
-  defp notify(_msg, %{notify: nil}) do
-    :ok
-  end
-
-  defp notify(msg, %{notify: notify}) do
-    send(notify, msg)
-    :ok
   end
 end

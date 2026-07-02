@@ -190,13 +190,6 @@ defmodule KinesisClient.Stream.AppState.Ecto do
     |> ShardLeases.get_shard_leases(repo)
   end
 
-  @impl true
-  def total_incomplete_lease_counts_by_worker(app_name, stream_name, opts) do
-    repo = Keyword.get(opts, :repo)
-
-    ShardLeases.incomplete_group_by_owner(app_name, stream_name, repo)
-  end
-
   def create_lease(attrs, opts) when is_map(attrs) do
     repo = Keyword.get(opts, :repo)
 

@@ -111,6 +111,44 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
     assert_receive {:acked, %{success: _successful, checkpoint: "12345", failed: []}}, 10_000
   end
 
+  test "stops producing when the checkpoint fails because the lease was lost" do
+    opts = producer_opts(status: :started)
+    {:ok, producer} = start_supervised({Producer, opts})
+    {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+    KinesisMock
+    |> expect(:get_shard_iterator, fn _, _, _, _ ->
+      {:ok, %{"ShardIterator" => "somesharditerator"}}
+    end)
+    |> expect(:get_records, fn _, _ ->
+      records = [%{"Data" => "foo", "SequenceNumber" => "12345"}]
+
+      {:ok, %{"NextShardIterator" => "foo", "MillisBehindLatest" => 1_000, "Records" => records}}
+    end)
+
+    # We own the lease for the fetch, then another worker steals it before
+    # the checkpoint: the owner-guarded checkpoint fails and get_lease names
+    # the thief.
+    AppStateMock
+    |> expect(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+      %{lease_owner: opts[:lease_owner]}
+    end)
+    |> stub(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+      %{lease_owner: worker_ref()}
+    end)
+    |> stub(:update_checkpoint, fn _app_name, _stream_name, _shard_id, _owner, _checkpoint, _ ->
+      {:error, :lease_owner_match}
+    end)
+
+    GenStage.sync_subscribe(consumer, to: producer, max_demand: 10, min_demand: 0)
+    assert_receive {:consumer_events, events}, 1_000
+
+    send(producer, {:ack, make_ref(), events, []})
+
+    assert_receive {:lease_lost, _shard_id}, 1_000
+    assert :sys.get_state(producer).state.status == :stopped
+  end
+
   test "close the shard when getting ResourceNotFoundException error" do
     opts = producer_opts(status: :started)
     {:ok, producer} = start_supervised({Producer, opts})

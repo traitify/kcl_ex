@@ -200,14 +200,6 @@ defmodule KinesisClient.Stream.AppState.Dynamo do
     )
   end
 
-  @impl true
-  def total_incomplete_lease_counts_by_worker(app_name, stream_name, opts) do
-    app_name
-    |> all_incomplete_leases(stream_name, opts)
-    |> Enum.frequencies_by(& &1.lease_owner)
-    |> Map.to_list()
-  end
-
   # Lease tables hold one row per shard, so a filtered Scan is cheap enough for
   # the load balancing queries (this mirrors how the Java KCL reads its lease
   # table). ExAws.stream!/1 follows LastEvaluatedKey pagination for us.

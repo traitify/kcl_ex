@@ -173,23 +173,6 @@ defmodule KinesisClient.Stream.AppState.DynamoTest do
       assert [%ShardLease{shard_id: "shard-000001", completed: false}] =
                AppState.all_incomplete_leases(app_name, "", [])
     end
-
-    test "total_incomplete_lease_counts_by_worker/3 groups counts by owner", %{lb_app: app_name} do
-      worker_1 = worker_ref()
-      worker_2 = worker_ref()
-      assert :ok == AppState.create_lease(app_name, "", "shard-000001", worker_1, [])
-      assert :ok == AppState.create_lease(app_name, "", "shard-000002", worker_1, [])
-      assert :ok == AppState.create_lease(app_name, "", "shard-000003", worker_2, [])
-      assert :ok == AppState.create_lease(app_name, "", "shard-000004", worker_2, [])
-      assert :ok == AppState.close_shard(app_name, "", "shard-000004", worker_2, [])
-
-      counts =
-        app_name
-        |> AppState.total_incomplete_lease_counts_by_worker("", [])
-        |> Enum.sort()
-
-      assert counts == Enum.sort([{worker_1, 2}, {worker_2, 1}])
-    end
   end
 
   defp confirm_table_created(app_name, attempts \\ 1) do

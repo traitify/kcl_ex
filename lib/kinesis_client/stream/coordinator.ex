@@ -7,7 +7,8 @@ defmodule KinesisClient.Stream.Coordinator do
   use GenServer
   use Retry.Annotation
 
-  import KinesisClient.Util
+  # The local notify/2 works off :notify_pid rather than Util's :notify key.
+  import KinesisClient.Util, except: [notify: 2]
 
   alias KinesisClient.Kinesis
   alias KinesisClient.Stream.AppState

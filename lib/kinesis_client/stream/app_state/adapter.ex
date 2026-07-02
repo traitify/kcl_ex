@@ -77,11 +77,4 @@ defmodule KinesisClient.Stream.AppState.Adapter do
               opts :: keyword
             ) ::
               list(ShardLease.t())
-
-  @callback total_incomplete_lease_counts_by_worker(
-              app_name :: String.t(),
-              stream_name :: String.t(),
-              opts :: keyword
-            ) ::
-              list({worker :: String.t(), count :: integer})
 end

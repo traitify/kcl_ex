@@ -52,17 +52,6 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLeases do
     end
   end
 
-  @spec incomplete_group_by_owner(String.t(), String.t(), Ecto.Repo.t()) ::
-          [{lease_owner :: String.t(), count :: integer}]
-  def incomplete_group_by_owner(app_name, stream_name, repo) do
-    from(sl in ShardLeaseEcto,
-      where: sl.app_name == ^app_name and sl.stream_name == ^stream_name and not sl.completed,
-      group_by: sl.lease_owner,
-      select: {sl.lease_owner, count(sl.shard_id)}
-    )
-    |> repo.all()
-  end
-
   # Pins the row to the freshly read lease_count AND lease_owner so a
   # concurrent renew/take between our read and this update makes the
   # update_all match zero rows instead of clobbering the other worker's
