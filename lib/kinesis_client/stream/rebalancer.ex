@@ -71,7 +71,20 @@ defmodule KinesisClient.Stream.Rebalancer do
   @impl GenServer
   def handle_info(:rebalance, state) do
     schedule_rebalance(state)
+    run_rebalance(state)
+    {:noreply, state}
+  rescue
+    # Rebalancing is best-effort and must never take down the stream: the
+    # adapters raise on transient failures (a throttled Dynamo scan, a DB
+    # blip), and this process shares a :one_for_all supervisor with the
+    # Coordinator and every shard pipeline. Log it and try again next tick.
+    error ->
+      Logger.error("Rebalancer: Rebalance tick failed: #{inspect(error)}")
+      notify({:rebalance_failed, error}, state)
+      {:noreply, state}
+  end
 
+  defp run_rebalance(state) do
     state.app_name
     |> AppState.total_incomplete_lease_counts_by_worker(state.stream_name, state.app_state_opts)
     |> LoadBalance.decide(state.lease_owner)
@@ -79,28 +92,26 @@ defmodule KinesisClient.Stream.Rebalancer do
       :balanced ->
         notify({:all_balanced, state}, state)
 
-      {:steal_from, victim} ->
-        steal_from(victim, state)
+      {:steal_from, victim, deficit} ->
+        steal_from(victim, deficit, state)
     end
-
-    {:noreply, state}
   end
 
-  defp steal_from(victim, state) do
+  defp steal_from(victim, deficit, state) do
     state.app_name
     |> AppState.get_leases_by_worker(state.stream_name, victim, state.app_state_opts)
     |> Enum.reject(& &1.completed)
     |> Enum.shuffle()
     |> Enum.map(&local_lease_process(&1, state))
     |> Enum.reject(&is_nil/1)
-    |> Enum.take(state.max_leases_to_steal)
+    |> Enum.take(min(deficit, state.max_leases_to_steal))
     |> Enum.each(fn {shard_id, pid} ->
       Logger.debug(
         "Rebalancer: Requesting steal of shard #{shard_id} from #{victim}: " <>
           "[lease_owner: #{state.lease_owner}]"
       )
 
-      send(pid, :steal_lease)
+      send(pid, {:steal_lease, victim})
       notify({:steal_requested, shard_id}, state)
     end)
   end
@@ -109,9 +120,8 @@ defmodule KinesisClient.Stream.Rebalancer do
   # writer per shard on this worker. Shards without a running local lease
   # process (not started yet, or already shut down) are skipped this tick.
   defp local_lease_process(%{shard_id: shard_id}, state) do
-    LeaseV2
-    |> register_name(state.app_name, state.stream_name, [shard_id])
-    |> Process.whereis()
+    state.app_name
+    |> LeaseV2.whereis(state.stream_name, shard_id)
     |> case do
       nil -> nil
       pid -> {shard_id, pid}
@@ -124,7 +134,7 @@ defmodule KinesisClient.Stream.Rebalancer do
 
   # +/- 25% so workers don't tick in lockstep and stampede the same lease.
   defp jitter(interval) do
-    interval + :rand.uniform(div(interval, 2)) - div(interval, 4)
+    interval + :rand.uniform(max(div(interval, 2), 1)) - div(interval, 4)
   end
 
   defp notify(_msg, %{notify: nil}) do

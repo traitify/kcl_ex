@@ -51,7 +51,7 @@ defmodule KinesisClient.Stream.RebalancerTest do
     {:ok, pid} = start_supervised({Rebalancer, opts})
 
     assert_receive {:steal_requested, "shard-000002"}, 1_000
-    assert_receive {:lease_message, "shard-000002", :steal_lease}, 1_000
+    assert_receive {:lease_message, "shard-000002", {:steal_lease, ^victim}}, 1_000
     assert Process.alive?(pid)
     stop_supervised(Rebalancer)
   end
@@ -81,8 +81,41 @@ defmodule KinesisClient.Stream.RebalancerTest do
 
     {:ok, pid} = start_supervised({Rebalancer, opts})
 
-    assert_receive {:lease_message, _shard_id, :steal_lease}, 1_000
-    refute_receive {:lease_message, _shard_id, :steal_lease}, 200
+    assert_receive {:lease_message, _shard_id, {:steal_lease, _victim}}, 1_000
+    refute_receive {:lease_message, _shard_id, {:steal_lease, _victim}}, 200
+    assert Process.alive?(pid)
+    stop_supervised(Rebalancer)
+  end
+
+  test "clamps steals to the deficit even when max_leases_to_steal is higher" do
+    # Counts of {victim: 4, me: 0} mean a target of 2 and a deficit of 2:
+    # stealing max_leases_to_steal (3) would overshoot to {1, 3} and the
+    # imbalance would flip back and forth forever.
+    opts = build_rebalancer_opts(rebalance_interval: 600, max_leases_to_steal: 3)
+    victim = worker_ref()
+
+    victim_leases = [
+      build_shard_lease(shard_id: "shard-000001", lease_owner: victim),
+      build_shard_lease(shard_id: "shard-000002", lease_owner: victim),
+      build_shard_lease(shard_id: "shard-000003", lease_owner: victim),
+      build_shard_lease(shard_id: "shard-000004", lease_owner: victim)
+    ]
+
+    Enum.each(victim_leases, &register_lease_process(opts, &1.shard_id))
+
+    AppStateMock
+    |> stub(:total_incomplete_lease_counts_by_worker, fn _app_name, _stream_name, _opts ->
+      [{victim, 4}]
+    end)
+    |> stub(:get_leases_by_worker, fn _app_name, _stream_name, _lease_owner, _opts ->
+      victim_leases
+    end)
+
+    {:ok, pid} = start_supervised({Rebalancer, opts})
+
+    assert_receive {:lease_message, _shard_id, {:steal_lease, _victim}}, 1_000
+    assert_receive {:lease_message, _shard_id, {:steal_lease, _victim}}, 1_000
+    refute_receive {:lease_message, _shard_id, {:steal_lease, _victim}}, 200
     assert Process.alive?(pid)
     stop_supervised(Rebalancer)
   end
@@ -109,7 +142,24 @@ defmodule KinesisClient.Stream.RebalancerTest do
 
     {:ok, pid} = start_supervised({Rebalancer, opts})
 
-    assert_receive {:lease_message, "shard-000002", :steal_lease}, 1_000
+    assert_receive {:lease_message, "shard-000002", {:steal_lease, ^victim}}, 1_000
+    assert Process.alive?(pid)
+    stop_supervised(Rebalancer)
+  end
+
+  test "survives a failing balancing query and keeps ticking" do
+    opts = build_rebalancer_opts()
+
+    stub(AppStateMock, :total_incomplete_lease_counts_by_worker, fn _app_name,
+                                                                    _stream_name,
+                                                                    _opts ->
+      raise "throttled scan"
+    end)
+
+    {:ok, pid} = start_supervised({Rebalancer, opts})
+
+    assert_receive {:rebalance_failed, _error}, 1_000
+    assert_receive {:rebalance_failed, _error}, 1_000
     assert Process.alive?(pid)
     stop_supervised(Rebalancer)
   end

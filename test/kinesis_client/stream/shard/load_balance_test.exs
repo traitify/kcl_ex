@@ -18,10 +18,10 @@ defmodule KinesisClient.Stream.Shard.LoadBalanceTest do
       assert LoadBalance.decide(counts, "worker-1") == :balanced
     end
 
-    test "steals from the most loaded worker when under target" do
+    test "steals from the most loaded worker when under target, reporting the deficit" do
       counts = [{"worker-1", 1}, {"worker-2", 4}, {"worker-3", 4}]
 
-      assert LoadBalance.decide(counts, "worker-1") == {:steal_from, "worker-2"}
+      assert LoadBalance.decide(counts, "worker-1") == {:steal_from, "worker-2", 2}
     end
 
     test "a worker holding no leases counts itself and steals" do
@@ -29,7 +29,7 @@ defmodule KinesisClient.Stream.Shard.LoadBalanceTest do
       # must still count itself as a worker, see the imbalance, and steal.
       counts = [{"worker-2", 4}, {"worker-3", 4}]
 
-      assert LoadBalance.decide(counts, "worker-1") == {:steal_from, "worker-2"}
+      assert LoadBalance.decide(counts, "worker-1") == {:steal_from, "worker-2", 3}
     end
 
     test "does not steal when the lead is only one lease" do
@@ -45,13 +45,23 @@ defmodule KinesisClient.Stream.Shard.LoadBalanceTest do
       counts = [{"worker-1", 3}, {"worker-2", 6}, {"worker-3", 0}]
 
       assert LoadBalance.decide(counts, "worker-1") == :balanced
-      assert LoadBalance.decide(counts, "worker-3") == {:steal_from, "worker-2"}
+      assert LoadBalance.decide(counts, "worker-3") == {:steal_from, "worker-2", 3}
+    end
+
+    test "stealing exactly the deficit lands on a balanced spread" do
+      # {A: 4, B: 0}: taking more than the deficit of 2 would overshoot to
+      # {1, 3} and oscillate forever. Taking exactly the deficit settles it.
+      assert LoadBalance.decide([{"worker-a", 4}], "worker-b") == {:steal_from, "worker-a", 2}
+
+      settled = [{"worker-a", 2}, {"worker-b", 2}]
+      assert LoadBalance.decide(settled, "worker-a") == :balanced
+      assert LoadBalance.decide(settled, "worker-b") == :balanced
     end
 
     test "converges to an even spread as steals are applied" do
       # Simulate the {4, 4, 0} cluster rebalancing one steal at a time.
-      assert LoadBalance.decide([{"w2", 4}, {"w3", 4}], "w1") == {:steal_from, "w2"}
-      assert LoadBalance.decide([{"w1", 1}, {"w2", 3}, {"w3", 4}], "w1") == {:steal_from, "w3"}
+      assert LoadBalance.decide([{"w2", 4}, {"w3", 4}], "w1") == {:steal_from, "w2", 3}
+      assert LoadBalance.decide([{"w1", 1}, {"w2", 3}, {"w3", 4}], "w1") == {:steal_from, "w3", 2}
 
       assert LoadBalance.decide([{"w1", 2}, {"w2", 3}, {"w3", 3}], "w1") == :balanced
       assert LoadBalance.decide([{"w1", 2}, {"w2", 3}, {"w3", 3}], "w2") == :balanced

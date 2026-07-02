@@ -65,7 +65,6 @@ defmodule KinesisClient.Stream do
       |> optional_kw(:app_state_opts, fetch_value_for_key!(opts, :app_state_opts))
       |> optional_kw(:lease_renew_interval, Keyword.get(opts, :lease_renew_interval))
       |> optional_kw(:lease_expiry, Keyword.get(opts, :lease_expiry))
-      |> optional_kw(:spread_lease, Keyword.get(opts, :spread_lease))
       |> optional_kw(:poll_interval, Keyword.get(opts, :poll_interval))
       |> optional_kw(:shard_iterator_type, Keyword.get(opts, :shard_iterator_type))
       |> optional_kw(:timestamp, Keyword.get(opts, :timestamp))
@@ -108,8 +107,6 @@ defmodule KinesisClient.Stream do
       nil ->
         register_name(KinesisClient.Stream.Coordinator, opts[:app_name], opts[:stream_name])
 
-      # Shard processes may be running on nodes different from the Coordinator if passed
-      # :shard_supervisor is distributed,so use :global to allow inter-node communication.
       _ ->
         {:global,
          register_name(KinesisClient.Stream.Coordinator, opts[:app_name], opts[:stream_name])}

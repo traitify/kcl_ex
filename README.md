@@ -106,9 +106,9 @@ Each worker runs a single rebalancer process that periodically (every
 `rebalance_interval`, jittered +/- 25%) compares how many incomplete leases
 each worker holds. When this worker is below the target load
 (`ceil(total_shards / total_workers)`) and another worker leads it by more
-than one lease, it steals a lease from the worker holding the most — at most
-`max_leases_to_steal` (default 1) per check, so workers converge on an even
-spread without overshooting. Workers that crash stop renewing their leases,
+than one lease, it steals from the worker holding the most — up to its lease
+deficit per check, capped at `max_leases_to_steal` (default 1) — so workers
+converge on an even spread without overshooting. Workers that crash stop renewing their leases,
 and after `lease_expiry` the remaining workers take those leases over.
 
 ## TODO

@@ -128,9 +128,54 @@ defmodule KinesisClient.Stream.Shard.LeaseV2Test do
     stop_supervised(LeaseV2)
   end
 
+  test "reclaims a lease the AppState says it owns but it is not holding" do
+    current_worker = worker_ref()
+
+    lease_opts =
+      build_lease_opts(
+        lease_owner: current_worker,
+        renew_interval: 200,
+        pipeline: NotifyingPipeline
+      )
+
+    # e.g. a renewal that "failed" after actually being applied (lost
+    # response + AWS retry fails the conditional check), or a restart of this
+    # process after taking the lease: the row names this worker as owner but
+    # lease_holder starts out (or was reset to) false. Without reclaiming,
+    # renewing requires lease_holder and taking rejects the current owner, so
+    # the shard would never be consumed again.
+    owned_shard_lease =
+      build_shard_lease(
+        lease_count: 1,
+        lease_owner: current_worker,
+        shard_id: lease_opts[:shard_id]
+      )
+
+    AppStateMock
+    |> stub(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+      owned_shard_lease
+    end)
+    |> stub(:renew_lease, fn _app_name, _stream_name, shard_lease, _opts ->
+      {:ok, shard_lease.lease_count + 1}
+    end)
+
+    {:ok, pid} = start_supervised({LeaseV2, lease_opts})
+
+    assert_receive {:initialized, lease_state}, 1_000
+    assert lease_state.lease_holder == false
+
+    assert_receive {:lease_reclaimed, lease_state}, 1_000
+    assert lease_state.lease_holder == true
+    assert lease_state.lease_count == owned_shard_lease.lease_count + 1
+    assert_receive {:pipeline_started, _shard_id}, 1_000
+    assert Process.alive?(pid)
+    stop_supervised(LeaseV2)
+  end
+
   describe ":steal_lease message" do
     test "steals the lease from its current owner and starts the pipeline" do
       current_worker = worker_ref()
+      victim = worker_ref()
 
       lease_opts =
         build_lease_opts(lease_owner: current_worker, pipeline: NotifyingPipeline)
@@ -138,7 +183,7 @@ defmodule KinesisClient.Stream.Shard.LeaseV2Test do
       shard_lease =
         build_shard_lease(
           lease_count: 8,
-          lease_owner: worker_ref(),
+          lease_owner: victim,
           shard_id: lease_opts[:shard_id]
         )
 
@@ -160,7 +205,7 @@ defmodule KinesisClient.Stream.Shard.LeaseV2Test do
       assert_receive {:initialized, lease_state}, 1_000
       assert lease_state.lease_holder == false
 
-      send(pid, :steal_lease)
+      send(pid, {:steal_lease, victim})
 
       assert_receive {:lease_stolen, lease_state}, 1_000
       assert lease_state.lease_holder == true
@@ -212,11 +257,37 @@ defmodule KinesisClient.Stream.Shard.LeaseV2Test do
       assert_receive {:initialized, lease_state}, 1_000
       assert lease_state.lease_count == stale_shard_lease.lease_count
 
-      send(pid, :steal_lease)
+      send(pid, {:steal_lease, other_worker})
 
       assert_receive {:lease_stolen, lease_state}, 1_000
       assert lease_state.lease_holder == true
       assert lease_state.lease_count == fresh_shard_lease.lease_count + 1
+      assert Process.alive?(pid)
+      stop_supervised(LeaseV2)
+    end
+
+    test "skips the steal when the lease changed owners since the decision" do
+      lease_opts = build_lease_opts()
+      chosen_victim = worker_ref()
+      new_owner = worker_ref()
+
+      # The rebalancer picked chosen_victim, but by the time the request
+      # arrives the lease belongs to someone else — stealing now would hit a
+      # worker the balancing decision never targeted.
+      shard_lease =
+        build_shard_lease(lease_owner: new_owner, shard_id: lease_opts[:shard_id])
+
+      stub(AppStateMock, :get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+        shard_lease
+      end)
+
+      {:ok, pid} = start_supervised({LeaseV2, lease_opts})
+
+      assert_receive {:initialized, %{lease_holder: false}}, 1_000
+
+      send(pid, {:steal_lease, chosen_victim})
+
+      refute_receive {:lease_stolen, _}, 200
       assert Process.alive?(pid)
       stop_supervised(LeaseV2)
     end
@@ -236,7 +307,7 @@ defmodule KinesisClient.Stream.Shard.LeaseV2Test do
 
       assert_receive {:initialized, %{lease_holder: true}}, 1_000
 
-      send(pid, :steal_lease)
+      send(pid, {:steal_lease, worker_ref()})
 
       refute_receive {:lease_stolen, _}, 200
       assert Process.alive?(pid)
@@ -261,7 +332,7 @@ defmodule KinesisClient.Stream.Shard.LeaseV2Test do
 
       assert_receive {:initialized, %{lease_holder: false}}, 1_000
 
-      send(pid, :steal_lease)
+      send(pid, {:steal_lease, shard_lease.lease_owner})
 
       refute_receive {:lease_stolen, _}, 200
       assert Process.alive?(pid)

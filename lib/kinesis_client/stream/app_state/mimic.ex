@@ -42,8 +42,11 @@ defmodule KinesisClient.Stream.AppState.Mimic do
   end
 
   @impl true
-  def get_leases_by_worker(_app_name, _stream_name, _lease_owner, _opts) do
-    []
+  def get_leases_by_worker(app_name, stream_name, lease_owner, opts) do
+    {from, to} = modules(opts)
+
+    to.get_leases_by_worker(app_name, stream_name, lease_owner, opts)
+    from.get_leases_by_worker(app_name, stream_name, lease_owner, opts)
   end
 
   @impl true
