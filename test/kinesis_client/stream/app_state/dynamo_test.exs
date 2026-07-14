@@ -1,6 +1,10 @@
 defmodule KinesisClient.Stream.AppState.DynamoTest do
   use KinesisClient.Case
 
+  # Hits a real DynamoDB (localstack on :4566) in setup_all, so it is excluded
+  # by default (see test_helper.exs). Run with `mix test --include integration`.
+  @moduletag :integration
+
   alias ExAws.Dynamo
   alias KinesisClient.Stream.AppState.Dynamo, as: AppState
   alias KinesisClient.Stream.AppState.ShardLease

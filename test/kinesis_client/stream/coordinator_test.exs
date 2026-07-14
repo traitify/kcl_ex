@@ -5,13 +5,7 @@ defmodule KinesisClient.Stream.CoordinatorTest do
   alias KinesisClient.Stream.Coordinator
 
   @stream_name "decline-roman-empire-test"
-  @shard_count 6
   @supervisor_name MyShardSupervisor
-
-  setup_all do
-    KinesisClient.TestStream.create_stream(@stream_name, @shard_count)
-    :ok
-  end
 
   test "#remove_missing_parents" do
     %{"StreamDescription" => %{"Shards" => shards}} =
