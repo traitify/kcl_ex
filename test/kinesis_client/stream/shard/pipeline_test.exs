@@ -54,7 +54,10 @@ defmodule KinesisClient.Stream.Shard.PipelineTest do
        }}
     end)
 
+    test_pid = self()
+
     expect(AppStateMock, :get_lease, 2, fn _, _, _, _ ->
+      send(test_pid, :get_lease_called)
       %ShardLease{checkpoint: nil}
     end)
 
@@ -64,6 +67,12 @@ defmodule KinesisClient.Stream.Shard.PipelineTest do
 
     assert :ok ==
              Pipeline.start(%{app_name: app_name, stream_name: stream_name, shard_id: shard_id})
+
+    # The producer now replies to :start before fetching, so the reply is no
+    # longer a signal that the fetch has run. Wait on the fetch itself, or the
+    # test exits first and Mox reports 0 of the 2 expected calls.
+    assert_receive :get_lease_called, 1_000
+    assert_receive :get_lease_called, 1_000
   end
 
   test "can stop producer" do

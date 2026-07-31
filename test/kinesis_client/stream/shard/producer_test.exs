@@ -196,6 +196,50 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
     end
   end
 
+  describe "start/1" do
+    test "replies before fetching so a slow Kinesis call cannot time out the caller" do
+      opts = producer_opts()
+      {:ok, producer} = start_supervised({Producer, opts})
+
+      AppStateMock
+      |> stub(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        %{checkpoint: nil}
+      end)
+
+      test_pid = self()
+
+      # Blocks inside the fetch until the test releases it, standing in for
+      # Kinesis I/O that outlives GenServer.call/2's default 5s timeout — the
+      # fetch is wrapped in @retry with exponential backoff, so ~15s is
+      # reachable. When the reply was sent after the fetch, this deadlocked
+      # start/1 and killed the calling LeaseV2 process.
+      KinesisMock
+      |> stub(:get_shard_iterator, fn _, _, _, _ ->
+        send(test_pid, {:fetch_started, self()})
+
+        receive do
+          :release -> :ok
+        after
+          10_000 -> :timeout
+        end
+
+        {:ok, %{"ShardIterator" => "somesharditerator"}}
+      end)
+      |> stub(:get_records, fn _, _ ->
+        {:ok, %{"NextShardIterator" => "foo", "MillisBehindLatest" => 0, "Records" => []}}
+      end)
+
+      {elapsed_us, reply} = :timer.tc(fn -> Producer.start(producer) end)
+
+      assert reply == :ok
+      assert elapsed_us < 2_000_000, "start/1 waited #{div(elapsed_us, 1000)}ms for the fetch"
+
+      # The fetch is still in flight, which is the point: the reply did not wait.
+      assert_receive {:fetch_started, producer_pid}, 1_000
+      send(producer_pid, :release)
+    end
+  end
+
   defp producer_opts(overrides \\ []) do
     opts = [
       app_name: "foo",

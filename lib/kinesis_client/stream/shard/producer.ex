@@ -290,6 +290,15 @@ defmodule KinesisClient.Stream.Shard.Producer do
   def handle_call(:start, from, state) do
     Logger.debug("Starting KinesisClient.Stream.Shard.Producer: #{inspect(state)}")
 
+    # Reply before fetching. The reply is unconditionally :ok and the caller
+    # (LeaseV2, via Pipeline.start/1) discards it, but the fetch below performs
+    # Kinesis I/O behind @retry with exponential backoff — up to ~15s — while
+    # Producer.start/1 waits on GenServer.call/2's default 5s timeout. Replying
+    # last therefore killed the *caller*: a lease that had just been taken or
+    # stolen would crash its LeaseV2 process, drop lease_holder, and restart,
+    # so no shard ever stayed leased long enough to consume.
+    GenStage.reply(from, :ok)
+
     {:noreply, records, new_state} =
       state.app_name
       |> AppState.get_lease(state.stream_name, state.shard_id, state.app_state_opts)
@@ -329,7 +338,6 @@ defmodule KinesisClient.Stream.Shard.Producer do
           {:noreply, [], state}
       end
 
-    GenStage.reply(from, :ok)
     {:noreply, records, new_state}
   end
 
