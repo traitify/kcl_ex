@@ -371,6 +371,27 @@ defmodule KinesisClient.Stream.Shard.LeaseV2Test do
     stop_supervised(LeaseV2)
   end
 
+  test "doesn't take an expired lease when the shard is completed" do
+    lease_opts = build_lease_opts(lease_expiry: 500, renew_interval: 1_000)
+    shard_lease = build_shard_lease(lease_count: 12, completed: true)
+
+    # take_lease is intentionally left unstubbed: a completed shard must never
+    # be taken, so any call would raise and fail this test.
+    stub(AppStateMock, :get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+      shard_lease
+    end)
+
+    {:ok, pid} = start_supervised({LeaseV2, lease_opts})
+
+    assert_receive {:initialized, %{lease_holder: false}}, 1_000
+    refute_receive {:lease_taken, _}, 1_500
+    assert_receive {:tracking_lease, lease_state}, 5_000
+    assert lease_state.lease_holder == false
+    assert lease_state.lease_count == shard_lease.lease_count
+    assert Process.alive?(pid)
+    stop_supervised(LeaseV2)
+  end
+
   test "doesn't take lease if lease_expiry not exceeded" do
     shard_lease_count = 12
     lease_opts = build_lease_opts(lease_expiry: 5_000, renew_interval: 600)

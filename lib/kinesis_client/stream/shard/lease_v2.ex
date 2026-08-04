@@ -274,10 +274,14 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
         |> tap(fn state -> notify({:lease_taken, state}, state) end)
         |> tap(fn state -> state.pipeline.start(state) end)
 
-      {:error, error} ->
-        Logger.error(
-          "ShardLease: Error trying to take lease for shard #{state.shard_id}, lease_owner: #{state.lease_owner}, " <>
-            "current_owner: #{shard_lease.lease_owner}, error: #{inspect(error)}"
+      {:error, reason} ->
+        # Losing the optimistic-lock race is expected on every scale-out /
+        # failover: another worker took the same expired lease first. Log at
+        # :warning so these don't swamp error dashboards during deploys —
+        # genuine adapter failures raise rather than returning here.
+        Logger.warning(
+          "ShardLease: Did not take lease for shard #{state.shard_id} (another worker won): " <>
+            "[lease_owner: #{state.lease_owner}, current_owner: #{shard_lease.lease_owner}, reason: #{inspect(reason)}]"
         )
 
         %{state | lease_holder: false, lease_count_increment_time: current_time()}
@@ -325,10 +329,13 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
         |> tap(fn state -> notify({:lease_stolen, state}, state) end)
         |> tap(fn state -> state.pipeline.start(state) end)
 
-      {:error, error} ->
-        Logger.error(
-          "ShardLease: Error trying to steal lease for #{state.shard_id}, lease_owner: #{state.lease_owner}, " <>
-            "current_owner: #{shard_lease.lease_owner}, error: #{inspect(error)}"
+      {:error, reason} ->
+        # Two workers can legitimately race for the same lease during a
+        # rebalance; the loser lands here. Expected contention, not an error —
+        # genuine adapter failures raise rather than returning here.
+        Logger.warning(
+          "ShardLease: Did not steal lease for shard #{state.shard_id} (another worker won): " <>
+            "[lease_owner: #{state.lease_owner}, current_owner: #{shard_lease.lease_owner}, reason: #{inspect(reason)}]"
         )
 
         state
@@ -360,7 +367,12 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
 
         set_lease_count(shard_lease.lease_count, false, state)
 
-      current_time() - lcit > lease_expiry ->
+      # A completed shard is closed and its lease is terminal, so its owner stops
+      # renewing and the lease looks "expired" forever. Don't take it — flipping
+      # ownership on a completed row is a wasted write and shows up as confusing
+      # churn in the lease table (the Rebalancer already skips completed shards).
+      # Fall through to the tracking clause instead.
+      current_time() - lcit > lease_expiry and not shard_lease.completed ->
         Logger.debug(
           "ShardLease: Lease expired, attempting to take lease: [shard_id: #{state.shard_id}, lease_holder: #{state.lease_holder}, " <>
             "lease_count_increment_time: #{lcit}}, lease_owner: #{state.lease_owner}, lease_count: #{state.lease_count}, " <>

@@ -129,7 +129,12 @@ defmodule KinesisClient.Stream.AppState.Ecto do
       {:ok, updated_count}
     else
       {:error, error} ->
-        Logger.error("KinesisClient: Error trying to take lease for #{shard_id}: #{inspect(error)}")
+        # Expected conditional-write outcome — a lost optimistic-lock race or a
+        # stale lease_count — not an adapter failure (those raise). Log at
+        # :warning so routine scale-out lease contention doesn't read as errors.
+        Logger.warning(
+          "KinesisClient: Could not take lease for #{shard_id} (lease contention): #{inspect(error)}"
+        )
 
         {:error, :lease_take_failed}
     end
