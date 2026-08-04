@@ -285,12 +285,14 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
         |> tap(fn state -> state.pipeline.start(state) end)
 
       {:error, reason} ->
-        # Losing the optimistic-lock race is expected on every scale-out /
-        # failover: another worker took the same expired lease first. Log at
-        # :warning so these don't swamp error dashboards during deploys —
+        # Not necessarily a lost race: the adapter collapses several outcomes
+        # into :lease_take_failed, so state the outcome and let `reason` and the
+        # adapter's own log say why. Asserting "another worker won" here made a
+        # stale-lease_count bug read as ordinary scale-out contention.
+        # Log at :warning so these don't swamp error dashboards during deploys —
         # genuine adapter failures raise rather than returning here.
         Logger.warning(
-          "ShardLease: Did not take lease for shard #{state.shard_id} (another worker won): " <>
+          "ShardLease: Did not take lease for shard #{state.shard_id}: " <>
             "[lease_owner: #{state.lease_owner}, current_owner: #{shard_lease.lease_owner}, reason: #{inspect(reason)}]"
         )
 
@@ -341,10 +343,13 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
 
       {:error, reason} ->
         # Two workers can legitimately race for the same lease during a
-        # rebalance; the loser lands here. Expected contention, not an error —
-        # genuine adapter failures raise rather than returning here.
+        # rebalance and the loser lands here, but so do the adapter's other
+        # :lease_take_failed outcomes — so report the outcome and let `reason`
+        # and the adapter's own log distinguish them, rather than asserting a
+        # cause this clause cannot tell apart. Expected contention is not an
+        # error — genuine adapter failures raise rather than returning here.
         Logger.warning(
-          "ShardLease: Did not steal lease for shard #{state.shard_id} (another worker won): " <>
+          "ShardLease: Did not steal lease for shard #{state.shard_id}: " <>
             "[lease_owner: #{state.lease_owner}, current_owner: #{shard_lease.lease_owner}, reason: #{inspect(reason)}]"
         )
 

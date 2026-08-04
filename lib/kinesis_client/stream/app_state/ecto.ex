@@ -128,13 +128,50 @@ defmodule KinesisClient.Stream.AppState.Ecto do
            ) do
       {:ok, updated_count}
     else
-      {:error, error} ->
-        # Expected conditional-write outcome — a lost optimistic-lock race or a
-        # stale lease_count — not an adapter failure (those raise). Log at
-        # :warning so routine scale-out lease contention doesn't read as errors.
+      # A lost optimistic-lock race: the row was found, but lease_count or
+      # lease_owner changed between the read and the conditional update. This
+      # is the only genuine contention case here, and it is expected on every
+      # scale-out and failover, so it stays at :warning.
+      {:error, :update_unsuccessful} ->
         Logger.warning(
-          "KinesisClient: Could not take lease for #{shard_id} (lease contention): #{inspect(error)}"
+          "KinesisClient: Could not take lease for #{shard_id} " <>
+            "(lost the optimistic-lock race, another worker took it first)"
         )
+
+        {:error, :lease_take_failed}
+
+      # No row matched (shard_id, app_name, stream_name, lease_count). The
+      # lookup is keyed on lease_count, so this is a caller passing a
+      # lease_count that does not match the stored row — not contention, and
+      # not something a retry fixes on its own. Say so, because labelling it
+      # contention hides a stale-read bug behind expected-looking noise.
+      {:error, :not_found} ->
+        Logger.warning(
+          "KinesisClient: Could not take lease for #{shard_id}: no lease row matches " <>
+            "lease_count #{inspect(lease_count)}. This is a stale or incorrect lease_count " <>
+            "from the caller, or a missing lease row — not lease contention."
+        )
+
+        {:error, :lease_take_failed}
+
+      # This worker already owns the lease, so there is nothing to take.
+      {:error, :lease_owner_match} ->
+        Logger.debug(
+          "KinesisClient: Not taking lease for #{shard_id}, already owned by #{new_lease_owner}"
+        )
+
+        {:error, :lease_take_failed}
+
+      {:error, :missing_required_fields} ->
+        Logger.error(
+          "KinesisClient: Could not take lease for #{shard_id}: lookup was missing required " <>
+            "fields — #{inspect(shard_lease_params)}"
+        )
+
+        {:error, :lease_take_failed}
+
+      {:error, error} ->
+        Logger.warning("KinesisClient: Could not take lease for #{shard_id}: #{inspect(error)}")
 
         {:error, :lease_take_failed}
     end
