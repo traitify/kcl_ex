@@ -254,14 +254,24 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
   end
 
   defp take_shard_lease(shard_lease, %{app_state_opts: opts, app_name: app_name} = state) do
-    expected = state.lease_count + 1
+    # Use the lease_count from the freshly read shard_lease, not the copy in
+    # state, for the same reason as steal_shard_lease/2 below: state.lease_count
+    # is only synced on the renew tick, so for a non-holder it lags every
+    # renewal the current owner performs. The adapter looks the row up by
+    # lease_count, so a stale value matches no row and take_lease returns
+    # {:error, :not_found} on every attempt — meaning a lease released by a
+    # terminated worker could never be taken by anyone.
+    #
+    # `expected` must be derived from the same count that is passed, since
+    # take_lease reports the count it was given plus one.
+    expected = shard_lease.lease_count + 1
 
     case AppState.take_lease(
            app_name,
            state.stream_name,
            state.shard_id,
            state.lease_owner,
-           state.lease_count,
+           shard_lease.lease_count,
            opts
          ) do
       {:ok, ^expected} ->

@@ -371,6 +371,58 @@ defmodule KinesisClient.Stream.Shard.LeaseV2Test do
     stop_supervised(LeaseV2)
   end
 
+  test "takes an expired lease with the freshly read lease_count when the state count is stale" do
+    # Regression test. The test above stubs a single shard_lease, so
+    # state.lease_count and the freshly read count are always equal and a take
+    # that passes the stale state copy still passes. Here they diverge: init
+    # reads count 12 and syncs it into state, then the previous owner renews to
+    # 13 before the lease expires. take_lease looks the row up by lease_count,
+    # so passing the stale 12 matches no row and returns {:error, :not_found}
+    # forever — a lease released by a terminated worker is never re-taken.
+    lease_opts = build_lease_opts(lease_expiry: 500, renew_interval: 1_000)
+    other_worker = worker_ref()
+
+    stale_shard_lease =
+      build_shard_lease(
+        lease_count: 12,
+        lease_owner: other_worker,
+        shard_id: lease_opts[:shard_id]
+      )
+
+    fresh_shard_lease =
+      build_shard_lease(
+        lease_count: 13,
+        lease_owner: other_worker,
+        shard_id: lease_opts[:shard_id]
+      )
+
+    AppStateMock
+    |> expect(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+      stale_shard_lease
+    end)
+    |> stub(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+      fresh_shard_lease
+    end)
+    |> stub(:take_lease, fn _app_name, _stream_name, _shard_id, new_owner, lc, _opts ->
+      assert new_owner == lease_opts[:lease_owner]
+      assert lc == fresh_shard_lease.lease_count
+
+      {:ok, lc + 1}
+    end)
+
+    {:ok, pid} = start_supervised({LeaseV2, lease_opts})
+
+    assert_receive {:initialized, lease_state}, 1_000
+    assert lease_state.lease_holder == false
+    assert lease_state.lease_count == stale_shard_lease.lease_count
+
+    assert_receive {:lease_taken, lease_state}, 15_000
+    assert lease_state.lease_holder == true
+    assert lease_state.lease_count == fresh_shard_lease.lease_count + 1
+    assert Process.alive?(pid)
+    stop_supervised(LeaseV2)
+  end
+
   test "doesn't take an expired lease when the shard is completed" do
     lease_opts = build_lease_opts(lease_expiry: 500, renew_interval: 1_000)
     shard_lease = build_shard_lease(lease_count: 12, completed: true)
