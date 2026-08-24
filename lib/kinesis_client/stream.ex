@@ -40,7 +40,7 @@ defmodule KinesisClient.Stream do
   def init(opts) do
     stream_name = get_stream_name(opts)
     app_name = get_app_name(opts)
-    worker_ref = "#{stream_name}-worker-#{:rand.uniform(10_000)}"
+    worker_ref = "#{worker_ref_prefix(stream_name)}#{:rand.uniform(10_000)}"
     {shard_supervisor_spec, shard_supervisor_name} = get_shard_supervisor(opts)
     coordinator_name = get_coordinator_name(opts)
     shard_consumer = get_shard_consumer(opts)
@@ -101,6 +101,13 @@ defmodule KinesisClient.Stream do
 
     Supervisor.init(children, strategy: :one_for_all)
   end
+
+  @doc """
+  The lease_owner prefix for a stream's workers. Also used by the AppState
+  Ecto backfill to attribute legacy shard_lease rows to their stream, so a
+  format change here changes which rows that backfill claims.
+  """
+  def worker_ref_prefix(stream_name), do: "#{stream_name}-worker-"
 
   defp get_coordinator_name(opts) do
     case Keyword.get(opts, :shard_supervisor) do
