@@ -128,8 +128,50 @@ defmodule KinesisClient.Stream.AppState.Ecto do
            ) do
       {:ok, updated_count}
     else
+      # A lost optimistic-lock race: the row was found, but lease_count or
+      # lease_owner changed between the read and the conditional update. This
+      # is the only genuine contention case here, and it is expected on every
+      # scale-out and failover, so it stays at :warning.
+      {:error, :update_unsuccessful} ->
+        Logger.warning(
+          "KinesisClient: Could not take lease for #{shard_id} " <>
+            "(lost the optimistic-lock race, another worker took it first)"
+        )
+
+        {:error, :lease_take_failed}
+
+      # No row matched (shard_id, app_name, stream_name, lease_count). The
+      # lookup is keyed on lease_count, so this is a caller passing a
+      # lease_count that does not match the stored row — not contention, and
+      # not something a retry fixes on its own. Say so, because labelling it
+      # contention hides a stale-read bug behind expected-looking noise.
+      {:error, :not_found} ->
+        Logger.warning(
+          "KinesisClient: Could not take lease for #{shard_id}: no lease row matches " <>
+            "lease_count #{inspect(lease_count)}. This is a stale or incorrect lease_count " <>
+            "from the caller, or a missing lease row — not lease contention."
+        )
+
+        {:error, :lease_take_failed}
+
+      # This worker already owns the lease, so there is nothing to take.
+      {:error, :lease_owner_match} ->
+        Logger.debug(
+          "KinesisClient: Not taking lease for #{shard_id}, already owned by #{new_lease_owner}"
+        )
+
+        {:error, :lease_take_failed}
+
+      {:error, :missing_required_fields} ->
+        Logger.error(
+          "KinesisClient: Could not take lease for #{shard_id}: lookup was missing required " <>
+            "fields — #{inspect(shard_lease_params)}"
+        )
+
+        {:error, :lease_take_failed}
+
       {:error, error} ->
-        Logger.error("KinesisClient: Error trying to take lease for #{shard_id}: #{inspect(error)}")
+        Logger.warning("KinesisClient: Could not take lease for #{shard_id}: #{inspect(error)}")
 
         {:error, :lease_take_failed}
     end
@@ -188,28 +230,6 @@ defmodule KinesisClient.Stream.AppState.Ecto do
       completed: false
     }
     |> ShardLeases.get_shard_leases(repo)
-  end
-
-  @impl true
-  def lease_owner_with_most_leases(app_name, stream_name, opts) do
-    repo = Keyword.get(opts, :repo)
-
-    app_name
-    |> ShardLeases.get_owner_with_most_leases(stream_name, repo)
-    |> case do
-      nil ->
-        []
-
-      worker ->
-        get_leases_by_worker(app_name, stream_name, worker, opts)
-    end
-  end
-
-  @impl true
-  def total_incomplete_lease_counts_by_worker(app_name, stream_name, opts) do
-    repo = Keyword.get(opts, :repo)
-
-    ShardLeases.incomplete_group_by_owner(app_name, stream_name, repo)
   end
 
   def create_lease(attrs, opts) when is_map(attrs) do

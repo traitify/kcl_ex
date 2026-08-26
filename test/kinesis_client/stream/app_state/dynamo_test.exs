@@ -148,6 +148,37 @@ defmodule KinesisClient.Stream.AppState.DynamoTest do
     end
   end
 
+  describe "load balancing queries" do
+    setup do
+      app_name = "foo_app_#{random_string()}"
+      :ok = AppState.initialize(app_name, [])
+      %{lb_app: app_name}
+    end
+
+    test "get_leases_by_worker/4 returns only the given worker's leases", %{lb_app: app_name} do
+      lease_owner = worker_ref()
+      other_owner = worker_ref()
+      assert :ok == AppState.create_lease(app_name, "", "shard-000001", lease_owner, [])
+      assert :ok == AppState.create_lease(app_name, "", "shard-000002", lease_owner, [])
+      assert :ok == AppState.create_lease(app_name, "", "shard-000003", other_owner, [])
+
+      leases = AppState.get_leases_by_worker(app_name, "", lease_owner, [])
+
+      assert length(leases) == 2
+      assert Enum.all?(leases, &(&1.lease_owner == lease_owner))
+    end
+
+    test "all_incomplete_leases/3 excludes completed shards", %{lb_app: app_name} do
+      lease_owner = worker_ref()
+      assert :ok == AppState.create_lease(app_name, "", "shard-000001", lease_owner, [])
+      assert :ok == AppState.create_lease(app_name, "", "shard-000002", lease_owner, [])
+      assert :ok == AppState.close_shard(app_name, "", "shard-000002", lease_owner, [])
+
+      assert [%ShardLease{shard_id: "shard-000001", completed: false}] =
+               AppState.all_incomplete_leases(app_name, "", [])
+    end
+  end
+
   defp confirm_table_created(app_name, attempts \\ 1) do
     case app_name |> Dynamo.describe_table() |> ExAws.request() do
       {:ok, %{"Table" => %{"TableStatus" => "CREATING"}}} ->

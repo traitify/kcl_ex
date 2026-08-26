@@ -6,6 +6,19 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
 
   alias KinesisClient.Stream.Shard.Producer
 
+  require Logger
+
+  # Broadway starts its topology as a sibling of the lease process under the
+  # :one_for_all supervisor in KinesisClient.Stream.Shard, with the lease
+  # process listed first. A lease won during the lease process's
+  # handle_continue can therefore call start/1 before Broadway has finished
+  # registering, and the producer lookup exits with :noproc. Broadway comes up
+  # within a tick or two, so wait briefly and retry rather than letting the
+  # lease process crash: it self-heals via restart, but logs an alarming exit
+  # on essentially every fresh deploy of a first/lone worker.
+  @start_max_attempts 25
+  @start_retry_interval 100
+
   def start_link(opts) do
     producer_opts =
       [
@@ -64,47 +77,44 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
     Broadway.start_link(__MODULE__, pipeline_opts)
   end
 
-  def start(app_state) do
-    names =
-      Broadway.producer_names(
-        register_name(__MODULE__, app_state.app_name, app_state.stream_name, [app_state.shard_id])
+  def start(app_state), do: start(app_state, 1)
+
+  defp start(app_state, attempt) do
+    app_state
+    |> pipeline_name()
+    |> Broadway.producer_names()
+    |> collect_errors(&Producer.start/1)
+  catch
+    :exit, {:noproc, _} = reason when attempt < @start_max_attempts ->
+      Logger.debug(
+        "Pipeline for shard #{app_state.shard_id} not registered yet (#{inspect(reason)}), " <>
+          "retrying start (attempt #{attempt})"
       )
 
-    errors =
-      Enum.reduce(names, [], fn name, errs ->
-        case Producer.start(name) do
-          :ok ->
-            errs
-
-          other ->
-            [other | errs]
-        end
-      end)
-
-    case errors do
-      [] -> :ok
-      errors -> errors
-    end
+      Process.sleep(@start_retry_interval)
+      start(app_state, attempt + 1)
   end
 
   def stop(app_state) do
-    names =
-      Broadway.producer_names(
-        register_name(__MODULE__, app_state.app_name, app_state.stream_name, [app_state.shard_id])
-      )
+    app_state
+    |> pipeline_name()
+    |> Broadway.producer_names()
+    |> collect_errors(&Producer.stop/1)
+  end
 
-    errors =
-      Enum.reduce(names, [], fn name, errs ->
-        case Producer.stop(name) do
-          :ok ->
-            errs
+  defp pipeline_name(app_state) do
+    register_name(__MODULE__, app_state.app_name, app_state.stream_name, [app_state.shard_id])
+  end
 
-          other ->
-            [other | errs]
-        end
-      end)
-
-    case errors do
+  defp collect_errors(producer_names, fun) do
+    producer_names
+    |> Enum.reduce([], fn name, errs ->
+      case fun.(name) do
+        :ok -> errs
+        other -> [other | errs]
+      end
+    end)
+    |> case do
       [] -> :ok
       errors -> errors
     end

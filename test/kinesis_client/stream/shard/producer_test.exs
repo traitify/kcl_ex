@@ -111,6 +111,44 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
     assert_receive {:acked, %{success: _successful, checkpoint: "12345", failed: []}}, 10_000
   end
 
+  test "stops producing when the checkpoint fails because the lease was lost" do
+    opts = producer_opts(status: :started)
+    {:ok, producer} = start_supervised({Producer, opts})
+    {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+    KinesisMock
+    |> expect(:get_shard_iterator, fn _, _, _, _ ->
+      {:ok, %{"ShardIterator" => "somesharditerator"}}
+    end)
+    |> expect(:get_records, fn _, _ ->
+      records = [%{"Data" => "foo", "SequenceNumber" => "12345"}]
+
+      {:ok, %{"NextShardIterator" => "foo", "MillisBehindLatest" => 1_000, "Records" => records}}
+    end)
+
+    # We own the lease for the fetch, then another worker steals it before
+    # the checkpoint: the owner-guarded checkpoint fails and get_lease names
+    # the thief.
+    AppStateMock
+    |> expect(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+      %{lease_owner: opts[:lease_owner]}
+    end)
+    |> stub(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ ->
+      %{lease_owner: worker_ref()}
+    end)
+    |> stub(:update_checkpoint, fn _app_name, _stream_name, _shard_id, _owner, _checkpoint, _ ->
+      {:error, :lease_owner_match}
+    end)
+
+    GenStage.sync_subscribe(consumer, to: producer, max_demand: 10, min_demand: 0)
+    assert_receive {:consumer_events, events}, 1_000
+
+    send(producer, {:ack, make_ref(), events, []})
+
+    assert_receive {:lease_lost, _shard_id}, 1_000
+    assert :sys.get_state(producer).state.status == :stopped
+  end
+
   test "close the shard when getting ResourceNotFoundException error" do
     opts = producer_opts(status: :started)
     {:ok, producer} = start_supervised({Producer, opts})
@@ -155,6 +193,50 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
 
       assert_receive {:init, state}, 1_000
       assert state.demand_limit == 500
+    end
+  end
+
+  describe "start/1" do
+    test "replies before fetching so a slow Kinesis call cannot time out the caller" do
+      opts = producer_opts()
+      {:ok, producer} = start_supervised({Producer, opts})
+
+      AppStateMock
+      |> stub(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        %{checkpoint: nil}
+      end)
+
+      test_pid = self()
+
+      # Blocks inside the fetch until the test releases it, standing in for
+      # Kinesis I/O that outlives GenServer.call/2's default 5s timeout — the
+      # fetch is wrapped in @retry with exponential backoff, so ~15s is
+      # reachable. When the reply was sent after the fetch, this deadlocked
+      # start/1 and killed the calling LeaseV2 process.
+      KinesisMock
+      |> stub(:get_shard_iterator, fn _, _, _, _ ->
+        send(test_pid, {:fetch_started, self()})
+
+        receive do
+          :release -> :ok
+        after
+          10_000 -> :timeout
+        end
+
+        {:ok, %{"ShardIterator" => "somesharditerator"}}
+      end)
+      |> stub(:get_records, fn _, _ ->
+        {:ok, %{"NextShardIterator" => "foo", "MillisBehindLatest" => 0, "Records" => []}}
+      end)
+
+      {elapsed_us, reply} = :timer.tc(fn -> Producer.start(producer) end)
+
+      assert reply == :ok
+      assert elapsed_us < 2_000_000, "start/1 waited #{div(elapsed_us, 1000)}ms for the fetch"
+
+      # The fetch is still in flight, which is the point: the reply did not wait.
+      assert_receive {:fetch_started, producer_pid}, 1_000
+      send(producer_pid, :release)
     end
   end
 

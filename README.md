@@ -35,8 +35,18 @@ opts = [
     app_name: app_name,
     stream_name: stream_name
   ],
-  # optional to limit the amount of times a lease can be renewed
-  lease_renewal_limit: 10,
+  # optional, how often (ms) a held lease is renewed. Default: 30_000
+  lease_renew_interval: 30_000,
+  # optional, how long (ms) a lease can go unrenewed before another worker
+  # may take it. Must be greater than lease_renew_interval. Default: 45_001
+  lease_expiry: 45_001,
+  # optional, how often (ms) this worker checks whether leases are spread
+  # evenly across workers and steals one from an overloaded worker if not.
+  # Default: 6_000
+  rebalance_interval: 6_000,
+  # optional, the maximum number of leases to steal per rebalance check.
+  # Default: 1
+  max_leases_to_steal: 1,
   # optional poll_interval for getting records from kinesis
   poll_interval: 500,
   processors: [
@@ -90,8 +100,17 @@ doing it currently:
 SERVICES=kinesis,dynamodb localstack start --host
 ```
 
+## Load balancing
+
+Each worker runs a single rebalancer process that periodically (every
+`rebalance_interval`, jittered +/- 25%) compares how many incomplete leases
+each worker holds. When this worker is below the target load
+(`ceil(total_shards / total_workers)`) and another worker leads it by more
+than one lease, it steals from the worker holding the most — up to its lease
+deficit per check, capped at `max_leases_to_steal` (default 1) — so workers
+converge on an even spread without overshooting. Workers that crash stop renewing their leases,
+and after `lease_expiry` the remaining workers take those leases over.
+
 ## TODO
 - [ ] Test shard merges and splits more thoroughly
-- [ ] Implement a work stealing algorithim to help distribute the load among
-  different Elixir nodes processing the same app.
 

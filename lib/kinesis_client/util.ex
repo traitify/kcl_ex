@@ -11,4 +11,19 @@ defmodule KinesisClient.Util do
   def register_name(module, app_name, stream_name, addtnl \\ []) do
     Module.concat([module, app_name, stream_name] ++ addtnl)
   end
+
+  @doc """
+  Sends `message` to the pid in the state's `:notify` field, if one is set.
+
+  Used by the lease and rebalancer processes to expose lifecycle events to
+  tests.
+  """
+  def notify(_message, %{notify: nil}) do
+    :ok
+  end
+
+  def notify(message, %{notify: pid}) do
+    send(pid, message)
+    :ok
+  end
 end

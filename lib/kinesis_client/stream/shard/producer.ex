@@ -128,7 +128,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
   def handle_info(:get_records, state) do
     notify(:poll_timer_executed, state)
 
-    if is_lease_owner?(state) do
+    if lease_owner?(state) do
       Logger.debug(
         "Try to fulfill pending demand #{state.demand}: [stream_name: #{state.stream_name}, shard_id: #{state.shard_id}]"
       )
@@ -162,38 +162,43 @@ defmodule KinesisClient.Stream.Shard.Producer do
   def handle_info({:ack, _ref, successful_msgs, []}, state) do
     %{metadata: %{"SequenceNumber" => checkpoint}} = successful_msgs |> Enum.reverse() |> hd()
 
-    state.app_name
-    |> AppState.update_checkpoint(
-      state.stream_name,
-      state.shard_id,
-      state.lease_owner,
-      checkpoint,
-      state.app_state_opts
-    )
-    |> case do
-      :ok ->
-        notify({:acked, %{checkpoint: checkpoint, success: successful_msgs, failed: []}}, state)
+    state =
+      state.app_name
+      |> AppState.update_checkpoint(
+        state.stream_name,
+        state.shard_id,
+        state.lease_owner,
+        checkpoint,
+        state.app_state_opts
+      )
+      |> case do
+        :ok ->
+          notify({:acked, %{checkpoint: checkpoint, success: successful_msgs, failed: []}}, state)
 
-        Logger.debug(
-          "Acknowledged #{length(successful_msgs)} messages: [app_name: #{state.app_name} " <>
-            "shard_id: #{state.shard_id} data: #{inspect(successful_msgs)}"
-        )
-
-      {:error, error} ->
-        shard_lease =
-          AppState.get_lease(
-            state.app_name,
-            state.stream_name,
-            state.shard_id,
-            state.app_state_opts
+          Logger.debug(
+            "Acknowledged #{length(successful_msgs)} messages: [app_name: #{state.app_name} " <>
+              "shard_id: #{state.shard_id} data: #{inspect(successful_msgs)}"
           )
 
-        Logger.error(
-          "Failed to update checkpoint after acknowledging #{length(successful_msgs)} messages: [app_name: #{state.app_name} " <>
-            "shard_id: #{state.shard_id} lease_owner: #{state.lease_owner} current_shard_owner: #{shard_lease.lease_owner} " <>
-            "checkpoint: #{checkpoint} error: #{inspect(error)} data: #{inspect(successful_msgs)}"
-        )
-    end
+          state
+
+        {:error, error} ->
+          shard_lease =
+            AppState.get_lease(
+              state.app_name,
+              state.stream_name,
+              state.shard_id,
+              state.app_state_opts
+            )
+
+          Logger.error(
+            "Failed to update checkpoint after acknowledging #{length(successful_msgs)} messages: [app_name: #{state.app_name} " <>
+              "shard_id: #{state.shard_id} lease_owner: #{state.lease_owner} current_shard_owner: #{inspect(shard_lease)} " <>
+              "checkpoint: #{checkpoint} error: #{inspect(error)} data: #{inspect(successful_msgs)}"
+          )
+
+          stop_if_lease_lost(shard_lease, state)
+      end
 
     state =
       state.status
@@ -207,7 +212,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @impl GenStage
   def handle_info({:ack, _ref, [], failed_msgs}, %{status: :stopped} = state) do
-    if is_lease_owner?(state) do
+    if lease_owner?(state) do
       Logger.debug(
         "Shard #{state.shard_id} - Retrying #{length(failed_msgs)} failed messages - #{inspect(failed_msgs)}"
       )
@@ -241,7 +246,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @impl GenStage
   def handle_info({:ack, _ref, successful_msgs, failed_msgs}, %{status: :stopped} = state) do
-    if is_lease_owner?(state) do
+    if lease_owner?(state) do
       Logger.debug(
         "Shard #{state.shard_id} - Acknowledged #{length(successful_msgs)} messages, " <>
           "Retrying #{length(failed_msgs)} failed messages - #{inspect(failed_msgs)}"
@@ -285,6 +290,15 @@ defmodule KinesisClient.Stream.Shard.Producer do
   def handle_call(:start, from, state) do
     Logger.debug("Starting KinesisClient.Stream.Shard.Producer: #{inspect(state)}")
 
+    # Reply before fetching. The reply is unconditionally :ok and the caller
+    # (LeaseV2, via Pipeline.start/1) discards it, but the fetch below performs
+    # Kinesis I/O behind @retry with exponential backoff — up to ~15s — while
+    # Producer.start/1 waits on GenServer.call/2's default 5s timeout. Replying
+    # last therefore killed the *caller*: a lease that had just been taken or
+    # stolen would crash its LeaseV2 process, drop lease_holder, and restart,
+    # so no shard ever stayed leased long enough to consume.
+    GenStage.reply(from, :ok)
+
     {:noreply, records, new_state} =
       state.app_name
       |> AppState.get_lease(state.stream_name, state.shard_id, state.app_state_opts)
@@ -324,7 +338,6 @@ defmodule KinesisClient.Stream.Shard.Producer do
           {:noreply, [], state}
       end
 
-    GenStage.reply(from, :ok)
     {:noreply, records, new_state}
   end
 
@@ -391,7 +404,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @retry with: 500 |> exponential_backoff() |> Stream.take(5)
   defp get_records_with_retry(state, kinesis_opts) do
-    if is_lease_owner?(state) do
+    if lease_owner?(state) do
       Kinesis.get_records(state.shard_iterator, kinesis_opts)
       |> tap(
         &Logger.debug("Shard #{state.shard_id} Kinesis get_records_with_retry: #{inspect(&1)}")
@@ -546,7 +559,27 @@ defmodule KinesisClient.Stream.Shard.Producer do
     Process.send_after(self(), :get_records, interval)
   end
 
-  defp is_lease_owner?(state) do
+  # Checkpoint updates are owner-guarded, so a failure with the lease naming
+  # another worker means the lease was stolen or expired since the last
+  # fetch. Stop producing right away instead of waiting for the lease process
+  # to notice at its next renewal — this bounds double consumption after a
+  # steal to the messages already in flight.
+  defp stop_if_lease_lost(%{lease_owner: owner}, %{lease_owner: owner} = state), do: state
+
+  defp stop_if_lease_lost(%{lease_owner: _other_owner}, state) do
+    Logger.warning(
+      "Shard #{state.shard_id} lease is no longer owned by this worker, stopping producer: " <>
+        "[app_name: #{state.app_name}, lease_owner: #{state.lease_owner}]"
+    )
+
+    notify({:lease_lost, state.shard_id}, state)
+
+    %{state | status: :stopped}
+  end
+
+  defp stop_if_lease_lost(_not_found_or_error, state), do: state
+
+  defp lease_owner?(state) do
     state.app_name
     |> AppState.get_lease(state.stream_name, state.shard_id, state.app_state_opts)
     |> then(fn lease -> lease.lease_owner == state.lease_owner end)

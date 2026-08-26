@@ -1,31 +1,42 @@
 defmodule KinesisClient.Stream.Shard.LeaseV2 do
   @moduledoc """
-  Load-balanced lease management for Kinesis shards.
+  Lease management for a single Kinesis shard.
 
-  This module implements a new load balancing mechanism where:
-  1. Each shard has a corresponding "lease" entry in the shard_lease table
-  2. Workers can steal leases from overloaded workers
-  3. Load balancing algorithm distributes shards evenly across workers
-  4. Periodic rebalancing and crash detection ensure optimal distribution
+  Each shard has a corresponding "lease" entry in the shard_lease table. This
+  process creates the lease if missing, renews it while held, and takes over
+  expired leases when their owner stops renewing (crash detection). It also
+  executes lease steals on behalf of `KinesisClient.Stream.Rebalancer`, which
+  makes the load balancing decisions once per worker and sends a
+  `:steal_lease` message to the shard it wants: this process stays the single
+  writer for its shard's lease state.
   """
   use GenServer
 
   import KinesisClient.Util
 
   alias KinesisClient.Stream.AppState
-  alias KinesisClient.Stream.Shard.LoadBalance
   alias KinesisClient.Stream.Shard.Pipeline
 
   require Logger
 
   @default_renew_interval 30_000
   @default_lease_expiry 45_001
-  @default_rebalance_interval 6_000
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts,
       name: register_name(__MODULE__, opts[:app_name], opts[:stream_name], [opts[:shard_id]])
     )
+  end
+
+  @doc """
+  Returns the pid of the locally registered lease process for `shard_id`, or
+  `nil` if none is running.
+  """
+  @spec whereis(String.t(), String.t(), String.t()) :: pid() | nil
+  def whereis(app_name, stream_name, shard_id) do
+    __MODULE__
+    |> register_name(app_name, stream_name, [shard_id])
+    |> Process.whereis()
   end
 
   defstruct [
@@ -40,8 +51,7 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
     :notify,
     :lease_expiry,
     :lease_holder,
-    :pipeline,
-    :rebalance_interval
+    :pipeline
   ]
 
   @type t :: %__MODULE__{}
@@ -59,8 +69,7 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
       lease_holder: Keyword.get(opts, :lease_holder, false),
       lease_count_increment_time: current_time(),
       notify: Keyword.get(opts, :notify),
-      pipeline: Keyword.get(opts, :pipeline, Pipeline),
-      rebalance_interval: Keyword.get(opts, :rebalance_interval, @default_rebalance_interval)
+      pipeline: Keyword.get(opts, :pipeline, Pipeline)
     }
 
     Process.send_after(self(), :take_or_renew_lease, state.renew_interval)
@@ -92,20 +101,16 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
 
         shard_lease ->
           Logger.debug(
-            "ShardLease: Found existing lease record in AppState, attempting load balancing: " <>
+            "ShardLease: Found existing lease record in AppState: " <>
               "[shard_id: #{state.shard_id}, lease_owner: #{shard_lease.lease_owner}]"
           )
 
-          shard_lease.lease_count
-          |> set_lease_count(false, state)
-          |> then(&load_balancing(shard_lease, &1))
+          set_lease_count(shard_lease.lease_count, false, state)
       end
 
     if new_state.lease_holder do
       :ok = state.pipeline.start(state)
     end
-
-    Process.send_after(self(), :rebalance, new_state.rebalance_interval)
 
     notify({:initialized, new_state}, state)
 
@@ -136,10 +141,14 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
     end
   end
 
+  # Sent by KinesisClient.Stream.Rebalancer when it decides this worker should
+  # steal this shard's lease from `victim`, the overloaded worker.
   @impl GenServer
-  def handle_info(:rebalance, state) do
-    Process.send_after(self(), :rebalance, state.rebalance_interval)
+  def handle_info({:steal_lease, _victim}, %{lease_holder: true} = state) do
+    {:noreply, state}
+  end
 
+  def handle_info({:steal_lease, victim}, state) do
     state
     |> get_shard_lease()
     |> case do
@@ -152,11 +161,7 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
         {:noreply, state}
 
       shard_lease ->
-        Logger.debug(
-          "ShardLease: Running rebalance process for shard #{state.shard_id}, lease_owner: #{state.lease_owner}, current_owner: #{shard_lease.lease_owner}"
-        )
-
-        {:noreply, load_balancing(shard_lease, state)}
+        {:noreply, maybe_steal(shard_lease, victim, state)}
     end
   end
 
@@ -180,6 +185,40 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
     end
   end
 
+  # The AppState row names this worker as owner while lease_holder is false —
+  # e.g. a renewal that "failed" after actually being applied (lost response
+  # + AWS retry fails the conditional check), or this process restarted after
+  # taking the lease. Neither renewing (requires lease_holder) nor taking
+  # (both adapters reject taking a lease you already own) can recover from
+  # here, so without this clause the shard would sit unconsumed forever.
+  # Renew under the optimistic lock and resume the pipeline; if another
+  # worker took the lease in the meantime, the renewal fails and we keep
+  # tracking.
+  defp reclaim_shard_lease(shard_lease, %{app_state_opts: opts, app_name: app_name} = state) do
+    expected = shard_lease.lease_count + 1
+
+    case AppState.renew_lease(app_name, state.stream_name, shard_lease, opts) do
+      {:ok, ^expected} ->
+        Logger.info(
+          "ShardLease: Reclaimed own lease that was not being held: " <>
+            "[shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}]"
+        )
+
+        expected
+        |> set_lease_count(true, state)
+        |> tap(&notify({:lease_reclaimed, &1}, &1))
+        |> tap(fn state -> state.pipeline.start(state) end)
+
+      {:error, error} ->
+        Logger.error(
+          "ShardLease: Failed to reclaim own lease, error: #{inspect(error)}, " <>
+            "[shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}]"
+        )
+
+        state
+    end
+  end
+
   defp renew_shard_lease(shard_lease, %{app_state_opts: opts, app_name: app_name} = state) do
     expected = shard_lease.lease_count + 1
 
@@ -193,9 +232,20 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
         |> set_lease_count(true, state)
         |> tap(&notify({:lease_renewed, &1}, &1))
 
+      {:error, :lease_renew_failed} ->
+        Logger.error(
+          "ShardLease: Failed to renew lease, stopping pipeline: [app_name: #{app_name}, " <>
+            "shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}, current_owner: #{shard_lease.lease_owner}]"
+        )
+
+        :ok = state.pipeline.stop(state)
+
+        %{state | lease_holder: false, lease_count_increment_time: current_time()}
+        |> tap(&notify({:lease_renew_failed, &1}, &1))
+
       {:error, error} ->
         Logger.error(
-          "ShardLease: Failed to renew lease, error: #{inspect(error)}, [app_name: #{app_name}, " <>
+          "ShardLease: Error trying to renew lease, error: #{inspect(error)}, [app_name: #{app_name}, " <>
             "shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}], current_owner: #{shard_lease.lease_owner}"
         )
 
@@ -204,14 +254,24 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
   end
 
   defp take_shard_lease(shard_lease, %{app_state_opts: opts, app_name: app_name} = state) do
-    expected = state.lease_count + 1
+    # Use the lease_count from the freshly read shard_lease, not the copy in
+    # state, for the same reason as steal_shard_lease/2 below: state.lease_count
+    # is only synced on the renew tick, so for a non-holder it lags every
+    # renewal the current owner performs. The adapter looks the row up by
+    # lease_count, so a stale value matches no row and take_lease returns
+    # {:error, :not_found} on every attempt — meaning a lease released by a
+    # terminated worker could never be taken by anyone.
+    #
+    # `expected` must be derived from the same count that is passed, since
+    # take_lease reports the count it was given plus one.
+    expected = shard_lease.lease_count + 1
 
     case AppState.take_lease(
            app_name,
            state.stream_name,
            state.shard_id,
            state.lease_owner,
-           state.lease_count,
+           shard_lease.lease_count,
            opts
          ) do
       {:ok, ^expected} ->
@@ -222,25 +282,54 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
         expected
         |> set_lease_count(true, state)
         |> tap(fn state -> notify({:lease_taken, state}, state) end)
-        |> tap(fn state -> Pipeline.start(state) end)
+        |> tap(fn state -> state.pipeline.start(state) end)
 
-      {:error, error} ->
-        Logger.error(
-          "ShardLease: Error trying to take lease for shard #{state.shard_id}, lease_owner: #{state.lease_owner}, " <>
-            "current_owner: #{shard_lease.lease_owner}, error: #{inspect(error)}"
+      {:error, reason} ->
+        # Not necessarily a lost race: the adapter collapses several outcomes
+        # into :lease_take_failed, so state the outcome and let `reason` and the
+        # adapter's own log say why. Asserting "another worker won" here made a
+        # stale-lease_count bug read as ordinary scale-out contention.
+        # Log at :warning so these don't swamp error dashboards during deploys —
+        # genuine adapter failures raise rather than returning here.
+        Logger.warning(
+          "ShardLease: Did not take lease for shard #{state.shard_id}: " <>
+            "[lease_owner: #{state.lease_owner}, current_owner: #{shard_lease.lease_owner}, reason: #{inspect(reason)}]"
         )
 
         %{state | lease_holder: false, lease_count_increment_time: current_time()}
     end
   end
 
+  defp maybe_steal(%{completed: true}, _victim, state), do: state
+
+  defp maybe_steal(%{lease_owner: victim} = shard_lease, victim, %{lease_owner: me} = state)
+       when victim != me do
+    steal_shard_lease(shard_lease, state)
+  end
+
+  # The lease changed hands between the rebalancer's decision and this
+  # message (or is already ours) — stealing now would hit the wrong worker,
+  # possibly one that is not overloaded at all. Let the next tick re-decide.
+  defp maybe_steal(shard_lease, victim, state) do
+    Logger.debug(
+      "ShardLease: Skipping steal, lease is no longer owned by the chosen victim: " <>
+        "[shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}, " <>
+        "victim: #{victim}, current_owner: #{shard_lease.lease_owner}]"
+    )
+
+    state
+  end
+
   defp steal_shard_lease(shard_lease, state) do
+    # Use the lease_count from the freshly read shard_lease rather than the copy
+    # in state: state.lease_count is only synced on the (slower) renew tick, and
+    # a stale count would fail the optimistic-lock check on every steal attempt.
     state.app_name
     |> AppState.take_lease(
       state.stream_name,
       state.shard_id,
       state.lease_owner,
-      state.lease_count,
+      shard_lease.lease_count,
       state.app_state_opts
     )
     |> case do
@@ -250,36 +339,21 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
         new_lease_count
         |> set_lease_count(true, state)
         |> tap(fn state -> notify({:lease_stolen, state}, state) end)
-        |> tap(fn state -> Pipeline.start(state) end)
+        |> tap(fn state -> state.pipeline.start(state) end)
 
-      {:error, error} ->
-        Logger.error(
-          "ShardLease: Error trying to steal lease for #{state.shard_id}, lease_owner: #{state.lease_owner}, " <>
-            "current_owner: #{shard_lease.lease_owner}, error: #{inspect(error)}"
+      {:error, reason} ->
+        # Two workers can legitimately race for the same lease during a
+        # rebalance and the loser lands here, but so do the adapter's other
+        # :lease_take_failed outcomes — so report the outcome and let `reason`
+        # and the adapter's own log distinguish them, rather than asserting a
+        # cause this clause cannot tell apart. Expected contention is not an
+        # error — genuine adapter failures raise rather than returning here.
+        Logger.warning(
+          "ShardLease: Did not steal lease for shard #{state.shard_id}: " <>
+            "[lease_owner: #{state.lease_owner}, current_owner: #{shard_lease.lease_owner}, reason: #{inspect(reason)}]"
         )
 
         state
-    end
-  end
-
-  defp load_balancing(shard_lease, state) do
-    state
-    |> LoadBalance.check_if_balanced?()
-    |> case do
-      true ->
-        Logger.debug(
-          "ShardLease: Current load is balanced - no action needed: [shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}]"
-        )
-
-        state
-        |> tap(&notify({:all_balanced, &1}, &1))
-
-      false ->
-        Logger.debug(
-          "ShardLease: Load is unbalanced, evaluating lease stealing options: [shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}]"
-        )
-
-        attempt_to_steal(shard_lease, state)
     end
   end
 
@@ -295,6 +369,9 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
 
         renew_shard_lease(shard_lease, state)
 
+      shard_lease.lease_owner == state.lease_owner ->
+        reclaim_shard_lease(shard_lease, state)
+
       shard_lease.lease_owner != state.lease_owner and state.lease_holder ->
         Logger.debug(
           "ShardLease: Lease lost to another worker, stopping pipeline: [shard_id: #{state.shard_id}, " <>
@@ -305,7 +382,12 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
 
         set_lease_count(shard_lease.lease_count, false, state)
 
-      current_time() - lcit > lease_expiry ->
+      # A completed shard is closed and its lease is terminal, so its owner stops
+      # renewing and the lease looks "expired" forever. Don't take it — flipping
+      # ownership on a completed row is a wasted write and shows up as confusing
+      # churn in the lease table (the Rebalancer already skips completed shards).
+      # Fall through to the tracking clause instead.
+      current_time() - lcit > lease_expiry and not shard_lease.completed ->
         Logger.debug(
           "ShardLease: Lease expired, attempting to take lease: [shard_id: #{state.shard_id}, lease_holder: #{state.lease_holder}, " <>
             "lease_count_increment_time: #{lcit}}, lease_owner: #{state.lease_owner}, lease_count: #{state.lease_count}, " <>
@@ -336,59 +418,6 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
     end
   end
 
-  defp attempt_to_steal(shard_lease, state) do
-    case shard_lease.lease_owner != state.lease_owner do
-      true ->
-        Logger.debug(
-          "ShardLease: Current worker does not own the lease, attempting to steal from overloaded worker: [shard_id: #{state.shard_id}, " <>
-            "lease_owner: #{state.lease_owner}, current_owner: #{shard_lease.lease_owner}]"
-        )
-
-        steal_lease_from_overloaded_worker(state)
-
-      false ->
-        Logger.debug(
-          "ShardLease: Current worker already owns the lease, no action needed: [shard_id: #{state.shard_id}, " <>
-            "lease_owner: #{state.lease_owner}, current_owner: #{shard_lease.lease_owner}]"
-        )
-
-        state
-    end
-  end
-
-  defp steal_lease_from_overloaded_worker(state) do
-    state.app_name
-    |> AppState.lease_owner_with_most_leases(state.stream_name, state.app_state_opts)
-    |> case do
-      [] ->
-        Logger.debug(
-          "ShardLease: No overloaded workers found to steal from for shard #{state.shard_id}"
-        )
-
-        state
-
-      shard_leases ->
-        shard_leases
-        |> Enum.find(fn shard_lease -> shard_lease.shard_id == state.shard_id end)
-        |> case do
-          nil ->
-            Logger.debug(
-              "ShardLease: Shard #{state.shard_id} does not belong to an overloaded worker"
-            )
-
-            state
-
-          shard_lease ->
-            Logger.debug(
-              "ShardLease: Attempting to steal lease for shard #{state.shard_id} [lease_owner: #{state.lease_owner}, " <>
-                "current_owner: #{shard_lease.lease_owner}, lease_count: #{state.lease_count}, current_lease_count: #{shard_lease.lease_count}]"
-            )
-
-            steal_shard_lease(shard_lease, state)
-        end
-    end
-  end
-
   defp set_lease_count(lease_count, is_lease_holder, %__MODULE__{} = state) do
     %{
       state
@@ -396,15 +425,6 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
         lease_holder: is_lease_holder,
         lease_count_increment_time: current_time()
     }
-  end
-
-  defp notify(_msg, %{notify: nil}) do
-    :ok
-  end
-
-  defp notify(msg, %{notify: notify}) do
-    send(notify, msg)
-    :ok
   end
 
   defp current_time() do
