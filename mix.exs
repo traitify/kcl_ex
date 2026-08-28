@@ -4,7 +4,7 @@ defmodule KinesisClient.Mixfile do
   def project do
     [
       app: :kinesis_client,
-      version: "1.1.30",
+      version: "1.1.31",
       elixir: "~> 1.16",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -71,6 +71,8 @@ defmodule KinesisClient.Mixfile do
       # crashes in-suite for tests that start supervised processes without
       # setting expectations. Revisit when the test setup is migrated to 1.2.
       {:mox, "~> 1.0.0", only: :test},
+      # Real-Postgres integration tests (mix test --include integration)
+      {:postgrex, "~> 0.19", only: :test},
       {:retry, "~> 0.14"},
       {:sobelow, "~> 0.13", only: [:dev, :test], runtime: false},
       {:styler, "~> 0.7", only: [:dev, :test], runtime: false}

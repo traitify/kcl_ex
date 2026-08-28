@@ -10,20 +10,31 @@ defmodule KinesisClient.Stream.AppState.Ecto do
   alias KinesisClient.Stream.AppState.Ecto.ShardLease
   alias KinesisClient.Stream.AppState.Ecto.ShardLeases
 
-  @migrations [
+  @pre_backfill_migrations [
     {CreateShardLeaseTable.version(), CreateShardLeaseTable},
     {AddAppAndStreamNameColumns.version(), AddAppAndStreamNameColumns},
-    {AddAdditionalUniqueConstraints.version(), AddAdditionalUniqueConstraints},
+    {AddAdditionalUniqueConstraints.version(), AddAdditionalUniqueConstraints}
+  ]
+
+  # UpdateShardLeasePrimaryKey sets app_name/stream_name NOT NULL, so it must
+  # not run until the backfill below has populated rows written by older
+  # library versions, or it raises 23502 and crash-loops the coordinator.
+  @post_backfill_migrations [
     {UpdateShardLeasePrimaryKey.version(), UpdateShardLeasePrimaryKey}
   ]
 
   require Logger
 
+  # Public so tests can build a faithful legacy (pre-backfill) table shape.
+  def pre_backfill_migrations, do: @pre_backfill_migrations
+
   @impl true
   def initialize(app_name, opts) do
     with {:ok, repo} <- get_repo(opts),
-         :ok <- run_migrations(repo) do
-      backfill_app_name_and_stream_name_columns(repo, app_name, opts)
+         :ok <- run_migrations(repo, @pre_backfill_migrations),
+         :ok <- backfill_app_name_and_stream_name_columns(repo, app_name, opts),
+         :ok <- delete_orphaned_leases(repo) do
+      run_migrations(repo, @post_backfill_migrations)
     end
   end
 
@@ -247,17 +258,45 @@ defmodule KinesisClient.Stream.AppState.Ecto do
 
   defp get_repo(opts), do: {:ok, Keyword.get(opts, :repo)}
 
-  defp run_migrations(repo, migrations \\ @migrations) do
+  defp run_migrations(repo, migrations) do
     Enum.each(migrations, fn {version, module} -> Ecto.Migrator.up(repo, version, module) end)
   end
 
+  # Claims only legacy rows written by this stream's own workers (lease_owner
+  # is "#{stream_name}-worker-#{n}"), so one stream cannot stamp its names
+  # onto another stream's rows when several streams share a repo.
   defp backfill_app_name_and_stream_name_columns(repo, app_name, opts) do
-    stream_name = Keyword.get(opts, :stream_name)
-    params = %{app_name: nil, stream_name: nil}
+    stream_name = Keyword.fetch!(opts, :stream_name)
 
     ShardLease.query()
-    |> ShardLease.build_get_query(params)
+    |> ShardLease.missing_names()
+    |> ShardLease.owned_by_stream_workers(stream_name)
     |> repo.update_all(set: [app_name: app_name, stream_name: stream_name])
+
+    :ok
+  end
+
+  # Rows the backfill did not claim (renamed streams, retired workers) would
+  # still fail the NOT NULL migration, so they are deleted. If such a lease is
+  # live, its consumer restarts from the stream's configured initial position.
+  defp delete_orphaned_leases(repo) do
+    {count, orphans} =
+      ShardLease.query()
+      |> ShardLease.missing_names()
+      |> ShardLease.select_owner_info()
+      |> repo.delete_all()
+
+    log_orphaned_leases(count, orphans)
+  end
+
+  defp log_orphaned_leases(0, _orphans), do: :ok
+
+  defp log_orphaned_leases(count, orphans) do
+    Logger.warning(
+      "KinesisClient: deleted #{count} orphaned shard_lease row(s) with no app_name/stream_name " <>
+        "whose lease_owner matches no configured stream. Any live consumer of these shards will " <>
+        "restart from the stream's configured initial position: #{inspect(orphans)}"
+    )
 
     :ok
   end
