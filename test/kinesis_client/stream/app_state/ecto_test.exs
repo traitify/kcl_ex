@@ -3,6 +3,22 @@ defmodule KinesisClient.Stream.AppState.EctoTest do
 
   alias KinesisClient.Ecto.Repo
   alias KinesisClient.Stream.AppState.Ecto
+  alias KinesisClient.Stream.AppState.Ecto.ShardLease
+  alias KinesisClient.Stream.AppState.Ecto.ShardLeases
+
+  # Captures the query handed to update_all/2 so a test can assert on the
+  # WHERE clause the checkpoint write is guarded by.
+  defmodule CaptureRepo do
+    def update_all(query, []) do
+      send(self(), {:update_all, query})
+      {1, [%ShardLease{checkpoint: "checkpoint_1"}]}
+    end
+  end
+
+  # Simulates the conditional write matching no rows (lease no longer owned).
+  defmodule NoRowRepo do
+    def update_all(_query, []), do: {0, []}
+  end
 
   test "creates a shard_lease" do
     assert Ecto.create_lease("", "stream_name", "a.b.c", "test_owner", repo: Repo) == :ok
@@ -51,6 +67,39 @@ defmodule KinesisClient.Stream.AppState.EctoTest do
              repo: Repo
            ) ==
              :ok
+  end
+
+  describe "update_checkpoint ownership guard" do
+    test "guards the write on lease_owner but not lease_count" do
+      params = %{
+        shard_id: "a.b.c",
+        app_name: "app_name",
+        stream_name: "stream_name",
+        lease_owner: "test_owner"
+      }
+
+      assert {:ok, _} = ShardLeases.update_checkpoint(params, "checkpoint_1", CaptureRepo)
+
+      assert_received {:update_all, query}
+      query_string = inspect(query)
+
+      # The write must survive a concurrent lease renewal bumping lease_count,
+      # so it may only condition on ownership, never on lease_count.
+      assert query_string =~ "lease_owner"
+      refute query_string =~ "lease_count"
+    end
+
+    test "maps a lost lease (no matching row) to :update_checkpoint_failed" do
+      assert {:error, :update_checkpoint_failed} =
+               Ecto.update_checkpoint(
+                 "app_name",
+                 "stream_name",
+                 "a.b.c",
+                 "test_owner",
+                 "checkpoint_1",
+                 repo: NoRowRepo
+               )
+    end
   end
 
   test "closes shard" do

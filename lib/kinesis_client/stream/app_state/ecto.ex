@@ -188,10 +188,10 @@ defmodule KinesisClient.Stream.AppState.Ecto do
       lease_owner: lease_owner
     }
 
-    with {:ok, shard_lease} <- ShardLeases.get_shard_lease(shard_lease_params, repo),
-         {:ok, _} <- ShardLeases.update_shard_lease(shard_lease, repo, checkpoint: checkpoint) do
-      :ok
-    else
+    case ShardLeases.update_checkpoint(shard_lease_params, checkpoint, repo) do
+      {:ok, _} ->
+        :ok
+
       {:error, error} ->
         Logger.error(
           "KinesisClient: Error trying to update checkpoint for #{shard_id}: #{inspect(error)}"

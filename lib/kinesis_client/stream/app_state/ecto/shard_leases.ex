@@ -52,6 +52,35 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLeases do
     end
   end
 
+  @doc """
+  Writes a checkpoint for a shard the caller still owns.
+
+  Unlike `update_shard_lease/3`, this is guarded on ownership only
+  (shard_id + app_name + stream_name + lease_owner), not on `lease_count`.
+  A checkpoint just needs to confirm the lease is still held by this owner;
+  gating it on `lease_count` would make it lose a benign race with the
+  concurrent lease renewals that bump `lease_count`, failing checkpoints for
+  a lease this worker still holds. This mirrors the Dynamo adapter, whose
+  `update_checkpoint` conditions only on `lease_owner`.
+  """
+  @spec update_checkpoint(map, String.t(), Ecto.Repo.t()) ::
+          {:error, :update_unsuccessful} | {:ok, ShardLease.t()}
+  def update_checkpoint(
+        %{shard_id: _, app_name: _, stream_name: _, lease_owner: _} = params,
+        checkpoint,
+        repo
+      ) do
+    ShardLeaseEcto.query()
+    |> ShardLeaseEcto.build_get_query(params)
+    |> select([sl], sl)
+    |> update([sl], set: [checkpoint: ^checkpoint])
+    |> repo.update_all([])
+    |> case do
+      {1, [shard_lease]} -> {:ok, shard_lease}
+      {_, _} -> {:error, :update_unsuccessful}
+    end
+  end
+
   # Pins the row to the freshly read lease_count AND lease_owner so a
   # concurrent renew/take between our read and this update makes the
   # update_all match zero rows instead of clobbering the other worker's
