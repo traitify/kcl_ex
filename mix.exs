@@ -4,7 +4,7 @@ defmodule KinesisClient.Mixfile do
   def project do
     [
       app: :kinesis_client,
-      version: "1.1.31",
+      version: "1.1.32",
       elixir: "~> 1.16",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -55,16 +55,16 @@ defmodule KinesisClient.Mixfile do
   defp deps do
     [
       {:broadway, "~> 1.1.0"},
-      {:configparser_ex, "~> 4.0"},
+      {:configparser_ex, "~> 5.0"},
       {:credo, "~> 1.0", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.0", only: [:dev], runtime: false},
       {:ecto_sql, "~> 3.6"},
-      {:ex_aws, "~> 2.1"},
+      {:ex_aws, "~> 2.7"},
       {:ex_aws_dynamo, "~> 4.0"},
       {:ex_aws_kinesis, "~> 2.0"},
       {:excoveralls, "~> 0.10", only: :test},
       {:ex_doc, "~> 0.21", only: :dev, runtime: false},
-      {:hackney, "~> 1.9"},
+      {:hackney, "~> 4.0 and >= 4.0.2"},
       {:jason, "~> 1.1"},
       {:mix_test_watch, "~> 1.0", only: :dev, runtime: false},
       # Pinned to the 1.0 line: mox 1.2's nimble_ownership-based verify_on_exit!
