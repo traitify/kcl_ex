@@ -307,11 +307,45 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
       send(producer, :get_records)
 
       # Three ticks: the original plus one rescheduled after each failure. The
-      # third sees another owner and stops polling without a Kinesis call.
+      # third sees another owner, which also polls again (no Kinesis call).
       assert_receive :poll_timer_executed, 1_000
       assert_receive :poll_timer_executed, 1_000
       assert_receive :poll_timer_executed, 1_000
-      refute_receive :poll_timer_executed, 200
+      assert Process.alive?(producer)
+    end
+
+    test "poll tick keeps polling when the lease names another worker" do
+      opts = producer_opts(status: :started, poll_interval: 50)
+      {:ok, producer} = start_supervised({Producer, opts})
+      {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+      # A stale :not_owner reading (Dynamo get_item is eventually consistent)
+      # must not leave a :started producer idle with no poll timer — that is
+      # the TD-6631 stall again, and invisible to Pipeline.stopped?/1. No
+      # KinesisMock expectations: fetching while not owner would crash.
+      AppStateMock
+      |> expect(:get_lease, 2, fn _app_name, _stream_name, _shard_id, _opts ->
+        %{lease_owner: worker_ref()}
+      end)
+      |> stub(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        %{lease_owner: opts[:lease_owner], checkpoint: nil}
+      end)
+
+      KinesisMock
+      |> stub(:get_shard_iterator, fn _, _, _, _ -> {:ok, %{"ShardIterator" => "iterator"}} end)
+      |> stub(:get_records, fn _, _ ->
+        records = [%{"Data" => "after-stale-read", "SequenceNumber" => "1"}]
+        {:ok, %{"NextShardIterator" => "next", "MillisBehindLatest" => 0, "Records" => records}}
+      end)
+
+      # Demand arrives first; the fetch sees the stale owner and must poll again
+      # instead of idling. Once the row reads as ours, records flow.
+      GenStage.sync_subscribe(consumer, to: producer, max_demand: 10, min_demand: 0)
+
+      assert_receive :poll_timer_executed, 1_000
+      assert_receive :poll_timer_executed, 1_000
+      assert_receive {:consumer_events, [record]}, 1_000
+      assert record.data == "after-stale-read"
       assert Process.alive?(producer)
     end
 

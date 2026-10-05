@@ -432,12 +432,13 @@ defmodule KinesisClient.Stream.Shard.Producer do
     {:noreply, [], reschedule_poll(state)}
   end
 
+  # Keep polling (see poll_for_records/2 for the :not_owner rationale).
   defp maybe_end_of_shard_reached({:ok, :lease_owner_changed}, state) do
     Logger.debug(
       "#{inspect(state.lease_owner)} no longer has the shard #{state.shard_id}, not getting records"
     )
 
-    {:noreply, [], state}
+    {:noreply, [], reschedule_poll(state)}
   end
 
   defp maybe_end_of_shard_reached(
@@ -618,12 +619,18 @@ defmodule KinesisClient.Stream.Shard.Producer do
     get_records(%{state | poll_timer: nil})
   end
 
+  # Keep polling rather than going idle: a :not_owner reading can be stale
+  # (Dynamo get_item is eventually consistent, so a producer started right
+  # after its worker took the lease can read the previous owner), and an idle
+  # :started producer is invisible to the lease process's stopped? check. If
+  # ownership really changed, the lease process stops us at its next tick and
+  # the stopped clause ignores the remaining ticks.
   defp poll_for_records(:not_owner, state) do
     Logger.debug(
       "Lease owner is different, not getting records: [stream_name: #{state.stream_name}, shard_id: #{state.shard_id}]"
     )
 
-    {:noreply, [], state}
+    {:noreply, [], reschedule_poll(state)}
   end
 
   # The lease could not be read (e.g. the Repo pool was exhausted), so we don't
