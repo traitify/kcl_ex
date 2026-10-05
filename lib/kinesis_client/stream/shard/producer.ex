@@ -50,6 +50,18 @@ defmodule KinesisClient.Stream.Shard.Producer do
     GenServer.call(name, :stop)
   end
 
+  @doc """
+  The producer's status: `:stopped` (not fetching), `:started` or `:closed`.
+
+  Polled by `KinesisClient.Stream.Shard.LeaseV2` on every lease renewal so a
+  producer that Broadway restarted (always with `status: :stopped`) is started
+  again while the lease is still held.
+  """
+  @spec status(GenServer.server(), timeout()) :: :stopped | :started | :closed
+  def status(name, timeout \\ 5_000) do
+    GenServer.call(name, :status, timeout)
+  end
+
   @impl GenStage
   def init(opts) do
     state = %__MODULE__{
@@ -128,19 +140,9 @@ defmodule KinesisClient.Stream.Shard.Producer do
   def handle_info(:get_records, state) do
     notify(:poll_timer_executed, state)
 
-    if lease_owner?(state) do
-      Logger.debug(
-        "Try to fulfill pending demand #{state.demand}: [stream_name: #{state.stream_name}, shard_id: #{state.shard_id}]"
-      )
-
-      get_records(%{state | poll_timer: nil})
-    else
-      Logger.debug(
-        "Lease owner is different, not getting records: [stream_name: #{state.stream_name}, shard_id: #{state.shard_id}]"
-      )
-
-      {:noreply, [], state}
-    end
+    state
+    |> lease_ownership()
+    |> poll_for_records(state)
   end
 
   @impl GenStage
@@ -183,13 +185,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
           state
 
         {:error, error} ->
-          shard_lease =
-            AppState.get_lease(
-              state.app_name,
-              state.stream_name,
-              state.shard_id,
-              state.app_state_opts
-            )
+          shard_lease = fetch_lease(state)
 
           Logger.error(
             "Failed to update checkpoint after acknowledging #{length(successful_msgs)} messages: [app_name: #{state.app_name} " <>
@@ -212,17 +208,9 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @impl GenStage
   def handle_info({:ack, _ref, [], failed_msgs}, %{status: :stopped} = state) do
-    if lease_owner?(state) do
-      Logger.debug(
-        "Shard #{state.shard_id} - Retrying #{length(failed_msgs)} failed messages - #{inspect(failed_msgs)}"
-      )
-
-      {:noreply, failed_msgs, state}
-    else
-      Logger.debug("Stop retrying because the owner of shard #{state.shard_id} has changed")
-
-      {:noreply, [], state}
-    end
+    state
+    |> lease_ownership()
+    |> retry_while_stopped(failed_msgs, state)
   end
 
   @impl GenStage
@@ -246,18 +234,13 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @impl GenStage
   def handle_info({:ack, _ref, successful_msgs, failed_msgs}, %{status: :stopped} = state) do
-    if lease_owner?(state) do
-      Logger.debug(
-        "Shard #{state.shard_id} - Acknowledged #{length(successful_msgs)} messages, " <>
-          "Retrying #{length(failed_msgs)} failed messages - #{inspect(failed_msgs)}"
-      )
+    Logger.debug(
+      "Shard #{state.shard_id} - Acknowledged #{length(successful_msgs)} messages while stopped"
+    )
 
-      {:noreply, failed_msgs, state}
-    else
-      Logger.debug("Stop retrying because the owner of shard #{state.shard_id} has changed")
-
-      {:noreply, [], state}
-    end
+    state
+    |> lease_ownership()
+    |> retry_while_stopped(failed_msgs, state)
   end
 
   @impl GenStage
@@ -300,8 +283,8 @@ defmodule KinesisClient.Stream.Shard.Producer do
     GenStage.reply(from, :ok)
 
     {:noreply, records, new_state} =
-      state.app_name
-      |> AppState.get_lease(state.stream_name, state.shard_id, state.app_state_opts)
+      state
+      |> fetch_lease()
       |> case do
         %{completed: true} ->
           Logger.debug(
@@ -336,9 +319,25 @@ defmodule KinesisClient.Stream.Shard.Producer do
           Coordinator.close_shard(state.coordinator_name, state.shard_id)
 
           {:noreply, [], state}
+
+        # Stay :stopped. The lease process polls our status on every renewal
+        # and calls start/1 again, so a transient AppState failure costs at
+        # most one renew interval instead of crashing the producer.
+        {:error, reason} ->
+          Logger.error(
+            "Producer for shard #{state.shard_id} could not read its lease, staying stopped " <>
+              "until the lease process retries: #{inspect(reason)}"
+          )
+
+          {:noreply, [], state}
       end
 
     {:noreply, records, new_state}
+  end
+
+  @impl GenStage
+  def handle_call(:status, _from, state) do
+    {:reply, state.status, [], state}
   end
 
   @impl GenStage
@@ -368,7 +367,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
       {:ok, %{"ShardIterator" => nil}} ->
         Logger.debug("Shard #{state.shard_id} has nil shard iterator")
 
-        {:noreply, [], state}
+        {:noreply, [], reschedule_poll(state)}
 
       {:ok, %{"ShardIterator" => iterator}} ->
         get_records(%{state | shard_iterator: iterator})
@@ -387,7 +386,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
           "Shard #{state.shard_id} unable to get shard iterator: #{inspect(error)} - state: #{inspect(state)}"
         )
 
-        {:noreply, [], state}
+        {:noreply, [], reschedule_poll(state)}
     end
   end
 
@@ -404,14 +403,33 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @retry with: 500 |> exponential_backoff() |> Stream.take(5)
   defp get_records_with_retry(state, kinesis_opts) do
-    if lease_owner?(state) do
-      Kinesis.get_records(state.shard_iterator, kinesis_opts)
-      |> tap(
-        &Logger.debug("Shard #{state.shard_id} Kinesis get_records_with_retry: #{inspect(&1)}")
-      )
-    else
-      {:ok, :lease_owner_changed}
-    end
+    state
+    |> lease_ownership()
+    |> fetch_records(state, kinesis_opts)
+  end
+
+  defp fetch_records(:owner, state, kinesis_opts) do
+    state.shard_iterator
+    |> Kinesis.get_records(kinesis_opts)
+    |> tap(&Logger.debug("Shard #{state.shard_id} Kinesis get_records_with_retry: #{inspect(&1)}"))
+  end
+
+  defp fetch_records(:not_owner, _state, _kinesis_opts), do: {:ok, :lease_owner_changed}
+
+  # Not tagged :error on purpose: @retry above would otherwise block the
+  # producer for ~15s of backoff on a failure that is better handled by polling
+  # again after poll_interval (see maybe_end_of_shard_reached/2).
+  defp fetch_records({:error, reason}, _state, _kinesis_opts) do
+    {:lease_lookup_failed, reason}
+  end
+
+  defp maybe_end_of_shard_reached({:lease_lookup_failed, reason}, state) do
+    Logger.error(
+      "Shard #{state.shard_id} unable to verify lease ownership before fetching, polling " <>
+        "again in #{state.poll_interval}ms: #{inspect(reason)}"
+    )
+
+    {:noreply, [], reschedule_poll(state)}
   end
 
   defp maybe_end_of_shard_reached({:ok, :lease_owner_changed}, state) do
@@ -458,13 +476,16 @@ defmodule KinesisClient.Stream.Shard.Producer do
       "Shard #{shard_id} encountered error when getting records: #{inspect(error)} and the config limit is set to #{demand_limit}"
     )
 
-    {:noreply, [], state}
+    {:noreply, [], reschedule_poll(state)}
   end
 
+  # Every error branch polls again rather than returning without a poll timer:
+  # a producer with no timer pending and no new demand never fetches again,
+  # which left shards silently idle after a transient Kinesis or AppState error.
   defp maybe_end_of_shard_reached({:error, error}, %{shard_id: shard_id} = state) do
     Logger.error("Shard #{shard_id} encountered error when getting records: #{inspect(error)}")
 
-    {:noreply, [], state}
+    {:noreply, [], reschedule_poll(state)}
   end
 
   defp poll_timer({_, 0}, _poll_interval), do: nil
@@ -579,10 +600,112 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   defp stop_if_lease_lost(_not_found_or_error, state), do: state
 
-  defp lease_owner?(state) do
-    state.app_name
-    |> AppState.get_lease(state.stream_name, state.shard_id, state.app_state_opts)
-    |> then(fn lease -> lease.lease_owner == state.lease_owner end)
+  # Nothing to fetch for: wait for demand instead of polling (Kinesis rejects
+  # limit: 0). handle_demand/2 fetches as soon as a consumer asks for more.
+  defp poll_for_records(:owner, %{demand: 0} = state) do
+    Logger.debug(
+      "No pending demand, waiting for demand: [stream_name: #{state.stream_name}, shard_id: #{state.shard_id}]"
+    )
+
+    {:noreply, [], %{state | poll_timer: nil}}
+  end
+
+  defp poll_for_records(:owner, state) do
+    Logger.debug(
+      "Try to fulfill pending demand #{state.demand}: [stream_name: #{state.stream_name}, shard_id: #{state.shard_id}]"
+    )
+
+    get_records(%{state | poll_timer: nil})
+  end
+
+  defp poll_for_records(:not_owner, state) do
+    Logger.debug(
+      "Lease owner is different, not getting records: [stream_name: #{state.stream_name}, shard_id: #{state.shard_id}]"
+    )
+
+    {:noreply, [], state}
+  end
+
+  # The lease could not be read (e.g. the Repo pool was exhausted), so we don't
+  # know whether we still own the shard: neither fetch nor give up, poll again.
+  defp poll_for_records({:error, reason}, state) do
+    Logger.error(
+      "Shard #{state.shard_id} unable to verify lease ownership, polling again in " <>
+        "#{state.poll_interval}ms: #{inspect(reason)}"
+    )
+
+    {:noreply, [], reschedule_poll(state)}
+  end
+
+  defp retry_while_stopped(:owner, failed_msgs, state) do
+    Logger.debug(
+      "Shard #{state.shard_id} - Retrying #{length(failed_msgs)} failed messages - #{inspect(failed_msgs)}"
+    )
+
+    {:noreply, failed_msgs, state}
+  end
+
+  defp retry_while_stopped(:not_owner, _failed_msgs, state) do
+    Logger.debug("Stop retrying because the owner of shard #{state.shard_id} has changed")
+
+    {:noreply, [], state}
+  end
+
+  # Unknown ownership: keep retrying. The failed messages come back through
+  # :ack and are re-checked, whereas dropping them while we may still own the
+  # lease would lose them without a checkpoint rollback.
+  defp retry_while_stopped({:error, reason}, failed_msgs, state) do
+    Logger.warning(
+      "Shard #{state.shard_id} unable to verify lease ownership, retrying " <>
+        "#{length(failed_msgs)} failed messages anyway: #{inspect(reason)}"
+    )
+
+    {:noreply, failed_msgs, state}
+  end
+
+  # :owner | :not_owner | {:error, reason}. A missing row is not proof that
+  # another worker owns the shard, so it is reported as an error, not :not_owner.
+  defp lease_ownership(state) do
+    state
+    |> fetch_lease()
+    |> ownership_of(state.lease_owner)
+  end
+
+  defp ownership_of(%{lease_owner: owner}, owner), do: :owner
+  defp ownership_of(%{lease_owner: _other_owner}, _owner), do: :not_owner
+  defp ownership_of({:error, _reason} = error, _owner), do: error
+  defp ownership_of(:not_found, _owner), do: {:error, :not_found}
+
+  # The AppState adapters don't share an error contract: Dynamo returns
+  # {:error, _}, while Ecto lets the repo raise — DBConnection.ConnectionError
+  # when the pool is exhausted, which is what crashed 8 producers in production
+  # (TD-6631). Broadway restarts a crashed producer as :stopped, so a raise here
+  # idles the shard until the lease process notices. Normalise both shapes so a
+  # lease lookup can never take the producer down.
+  defp fetch_lease(state) do
+    AppState.get_lease(state.app_name, state.stream_name, state.shard_id, state.app_state_opts)
+  rescue
+    exception -> {:error, exception}
+  catch
+    :exit, reason -> {:error, {:exit, reason}}
+  end
+
+  # Poll again after poll_interval unless a poll is already pending. A stored
+  # timer may have fired already (e.g. ignored while :stopped), so check it
+  # rather than trusting a non-nil ref.
+  defp reschedule_poll(%{poll_timer: nil} = state), do: schedule_poll(state)
+
+  defp reschedule_poll(%{poll_timer: timer} = state) do
+    timer
+    |> Process.read_timer()
+    |> keep_or_schedule_poll(state)
+  end
+
+  defp keep_or_schedule_poll(false, state), do: schedule_poll(state)
+  defp keep_or_schedule_poll(_remaining_ms, state), do: state
+
+  defp schedule_poll(state) do
+    %{state | poll_timer: schedule_shard_poll(state.poll_interval)}
   end
 
   defp notify(message, %__MODULE__{notify_pid: notify_pid}) do

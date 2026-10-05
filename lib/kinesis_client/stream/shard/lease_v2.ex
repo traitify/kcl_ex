@@ -230,6 +230,7 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
 
         expected
         |> set_lease_count(true, state)
+        |> ensure_pipeline_running()
         |> tap(&notify({:lease_renewed, &1}, &1))
 
       {:error, :lease_renew_failed} ->
@@ -251,6 +252,52 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
 
         state
     end
+  end
+
+  # Only the create/take/steal/reclaim paths call pipeline.start/1, and Broadway
+  # restarts a crashed producer with status: :stopped. So a producer that
+  # crashed while this worker held the lease stayed stopped for as long as the
+  # lease kept being renewed — in production (TD-6631) a one-second Repo pool
+  # exhaustion crashed 8 producers and one shard sat unconsumed for 65 hours,
+  # until pod turnover happened to move its lease. Every successful renewal now
+  # confirms the pipeline is running and starts it again if it is not.
+  defp ensure_pipeline_running(state) do
+    state
+    |> state.pipeline.stopped?()
+    |> restart_pipeline(state)
+  end
+
+  defp restart_pipeline(false, state), do: state
+
+  defp restart_pipeline(true, state) do
+    Logger.warning(
+      "ShardLease: Pipeline is stopped while this worker holds the lease, starting it: " <>
+        "[app_name: #{state.app_name}, shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}]"
+    )
+
+    state
+    |> start_pipeline()
+    |> case do
+      :ok ->
+        notify({:pipeline_restarted, state}, state)
+
+      error ->
+        Logger.error(
+          "ShardLease: Failed to start pipeline, retrying on the next renewal: #{inspect(error)} " <>
+            "[app_name: #{state.app_name}, shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}]"
+        )
+    end
+
+    state
+  end
+
+  # A start that exits (the producer is busy or mid-restart) must not take this
+  # process down: that would restart the whole shard — producer included — on
+  # every renewal for as long as the condition lasts.
+  defp start_pipeline(state) do
+    state.pipeline.start(state)
+  catch
+    :exit, reason -> {:error, {:exit, reason}}
   end
 
   defp take_shard_lease(shard_lease, %{app_state_opts: opts, app_name: app_name} = state) do

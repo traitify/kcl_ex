@@ -15,6 +15,44 @@ defmodule KinesisClient.Stream.Shard.LeaseV2Test do
       send(state.notify, {:pipeline_stopped, state.shard_id})
       :ok
     end
+
+    def stopped?(_state), do: false
+  end
+
+  # A pipeline whose producer always reports :stopped — what a producer that
+  # Broadway restarted looks like until something calls start/1 again.
+  defmodule StoppedPipeline do
+    @moduledoc false
+    def start(state) do
+      send(state.notify, {:pipeline_started, state.shard_id})
+      :ok
+    end
+
+    def stop(_state), do: :ok
+
+    def stopped?(_state), do: true
+  end
+
+  # A stopped pipeline whose start/1 outcome the test scripts per call: it
+  # reports each attempt and waits for the test to say whether that start
+  # returns :ok or exits (as Pipeline.start/1 does when the producer is busy —
+  # call timeout — or Broadway is still restarting it).
+  defmodule ScriptedPipeline do
+    @moduledoc false
+    def start(state) do
+      send(state.notify, {:pipeline_start_attempted, self()})
+
+      receive do
+        {:start_result, :ok} -> :ok
+        {:start_result, :exit} -> exit({:timeout, {GenServer, :call, [self(), :start, 5_000]}})
+      after
+        1_000 -> :ok
+      end
+    end
+
+    def stop(_state), do: :ok
+
+    def stopped?(_state), do: true
   end
 
   test "creates and takes AppState.ShardLease if none already exists" do
@@ -170,6 +208,136 @@ defmodule KinesisClient.Stream.Shard.LeaseV2Test do
     assert_receive {:pipeline_started, _shard_id}, 1_000
     assert Process.alive?(pid)
     stop_supervised(LeaseV2)
+  end
+
+  # TD-6631: Broadway restarts a crashed producer as :stopped, and until now
+  # nothing started it again while this process kept renewing the lease.
+  describe "pipeline health on renewal" do
+    test "starts the pipeline again when it is stopped while the lease is held" do
+      current_worker = worker_ref()
+
+      lease_opts =
+        build_lease_opts(
+          lease_owner: current_worker,
+          renew_interval: 200,
+          pipeline: StoppedPipeline
+        )
+
+      owned_shard_lease =
+        build_shard_lease(
+          lease_count: 1,
+          lease_owner: current_worker,
+          shard_id: lease_opts[:shard_id]
+        )
+
+      AppStateMock
+      |> expect(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ -> :not_found end)
+      |> stub(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ -> owned_shard_lease end)
+      |> stub(:create_lease, fn _app_name, _stream_name, _shard_id, _lease_owner, _opts -> :ok end)
+      |> stub(:renew_lease, fn _app_name, _stream_name, shard_lease, _opts ->
+        {:ok, shard_lease.lease_count + 1}
+      end)
+
+      {:ok, pid} = start_supervised({LeaseV2, lease_opts})
+
+      assert_receive {:initialized, %{lease_holder: true}}, 1_000
+      # The start that comes with creating the lease.
+      assert_receive {:pipeline_started, _shard_id}, 1_000
+
+      # Within one renew interval the stopped pipeline is started again.
+      assert_receive {:pipeline_restarted, lease_state}, 1_000
+      assert lease_state.lease_holder == true
+      assert_receive {:pipeline_started, _shard_id}, 1_000
+      assert_receive {:lease_renewed, _lease_state}, 1_000
+      assert Process.alive?(pid)
+      stop_supervised(LeaseV2)
+    end
+
+    test "survives a pipeline start that exits and retries on the next renewal" do
+      current_worker = worker_ref()
+
+      lease_opts =
+        build_lease_opts(
+          lease_owner: current_worker,
+          renew_interval: 200,
+          pipeline: ScriptedPipeline
+        )
+
+      owned_shard_lease =
+        build_shard_lease(
+          lease_count: 1,
+          lease_owner: current_worker,
+          shard_id: lease_opts[:shard_id]
+        )
+
+      AppStateMock
+      |> expect(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ -> :not_found end)
+      |> stub(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ -> owned_shard_lease end)
+      |> stub(:create_lease, fn _app_name, _stream_name, _shard_id, _lease_owner, _opts -> :ok end)
+      |> stub(:renew_lease, fn _app_name, _stream_name, shard_lease, _opts ->
+        {:ok, shard_lease.lease_count + 1}
+      end)
+
+      {:ok, pid} = start_supervised({LeaseV2, lease_opts})
+
+      # The start that comes with creating the lease succeeds.
+      assert_receive {:pipeline_start_attempted, ^pid}, 1_000
+      send(pid, {:start_result, :ok})
+      assert_receive {:initialized, %{lease_holder: true}}, 1_000
+
+      # On the first renewal the (stopped) pipeline's start exits. The lease
+      # process must survive it, still count the renewal, and not report a
+      # restart.
+      assert_receive {:pipeline_start_attempted, ^pid}, 1_000
+      send(pid, {:start_result, :exit})
+      assert_receive {:lease_renewed, %{lease_holder: true}}, 1_000
+      refute_received {:pipeline_restarted, _}
+      assert Process.alive?(pid)
+
+      # The next renewal tries again and succeeds.
+      assert_receive {:pipeline_start_attempted, ^pid}, 1_000
+      send(pid, {:start_result, :ok})
+      assert_receive {:pipeline_restarted, _lease_state}, 1_000
+      assert Process.alive?(pid)
+      stop_supervised(LeaseV2)
+    end
+
+    test "leaves a running pipeline alone on renewal" do
+      current_worker = worker_ref()
+
+      lease_opts =
+        build_lease_opts(
+          lease_owner: current_worker,
+          renew_interval: 200,
+          pipeline: NotifyingPipeline
+        )
+
+      owned_shard_lease =
+        build_shard_lease(
+          lease_count: 1,
+          lease_owner: current_worker,
+          shard_id: lease_opts[:shard_id]
+        )
+
+      AppStateMock
+      |> expect(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ -> :not_found end)
+      |> stub(:get_lease, fn _in_app_name, _in_stream_name, _in_shard_id, _ -> owned_shard_lease end)
+      |> stub(:create_lease, fn _app_name, _stream_name, _shard_id, _lease_owner, _opts -> :ok end)
+      |> stub(:renew_lease, fn _app_name, _stream_name, shard_lease, _opts ->
+        {:ok, shard_lease.lease_count + 1}
+      end)
+
+      {:ok, pid} = start_supervised({LeaseV2, lease_opts})
+
+      assert_receive {:initialized, %{lease_holder: true}}, 1_000
+      assert_receive {:pipeline_started, _shard_id}, 1_000
+
+      assert_receive {:lease_renewed, _lease_state}, 1_000
+      refute_received {:pipeline_restarted, _}
+      refute_received {:pipeline_started, _}
+      assert Process.alive?(pid)
+      stop_supervised(LeaseV2)
+    end
   end
 
   describe ":steal_lease message" do

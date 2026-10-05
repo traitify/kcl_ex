@@ -37,6 +37,10 @@ defmodule KinesisClient.Stream.Shard do
         batchers: opts[:batchers],
         coordinator_name: opts[:coordinator_name]
       ]
+      # Lets a Shard started directly (as the shard-level tests do) inject a
+      # Kinesis adapter. KinesisClient.Stream does not forward this yet, so
+      # production producers still use the default adapter and ex_aws config.
+      |> optional_kw(:kinesis_opts, Keyword.get(opts, :kinesis_opts))
       |> optional_kw(:poll_interval, Keyword.get(opts, :poll_interval))
       |> optional_kw(:shard_iterator_type, Keyword.get(opts, :shard_iterator_type))
       |> optional_kw(:timestamp, Keyword.get(opts, :timestamp))
