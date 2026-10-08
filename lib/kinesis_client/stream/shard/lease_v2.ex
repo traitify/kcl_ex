@@ -9,6 +9,17 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
   makes the load balancing decisions once per worker and sends a
   `:steal_lease` message to the shard it wants: this process stays the single
   writer for its shard's lease state.
+
+  ## Telemetry
+
+  `[:kinesis_client, :shard, :pipeline_restart]` is emitted whenever a renewal
+  finds the shard's pipeline stopped while this worker holds the lease and
+  tries to start it (TD-6631). Measurements: `%{attempt: n}`, the number of
+  consecutive renewals that found it stopped. Metadata: `app_name`,
+  `stream_name`, `shard_id`, `lease_owner` and `result`, one of `:started`,
+  `:not_started` (the producer stayed stopped, e.g. it could not read its
+  lease) or `:error` (the start exited). Alert on `result != :started` or on
+  a rising `attempt`.
   """
   use GenServer
 
@@ -21,6 +32,7 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
 
   @default_renew_interval 30_000
   @default_lease_expiry 45_001
+  @restart_telemetry_event [:kinesis_client, :shard, :pipeline_restart]
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts,
@@ -51,7 +63,8 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
     :notify,
     :lease_expiry,
     :lease_holder,
-    :pipeline
+    :pipeline,
+    pipeline_restarts: 0
   ]
 
   @type t :: %__MODULE__{}
@@ -165,6 +178,14 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
     end
   end
 
+  # Unguarded on purpose, unlike the producer's lease lookup: an Ecto raise
+  # here (e.g. DBConnection.ConnectionError) crashes this process, the Shard's
+  # :one_for_all supervisor restarts it together with the pipeline, and the
+  # restarted process reclaims the row that still names it and starts the
+  # pipeline on its first tick. That costs a producer restart and up to one
+  # renew interval, but never a stall. Normalising the Ecto adapter's raises
+  # into {:error, _} (which handle_info(:take_or_renew_lease) already handles)
+  # is TD-6637.
   defp get_shard_lease(state) do
     AppState.get_lease(state.app_name, state.stream_name, state.shard_id, state.app_state_opts)
   end
@@ -230,6 +251,7 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
 
         expected
         |> set_lease_count(true, state)
+        |> ensure_pipeline_running(shard_lease)
         |> tap(&notify({:lease_renewed, &1}, &1))
 
       {:error, :lease_renew_failed} ->
@@ -251,6 +273,119 @@ defmodule KinesisClient.Stream.Shard.LeaseV2 do
 
         state
     end
+  end
+
+  # Only the create/take/steal/reclaim paths call pipeline.start/1, and Broadway
+  # restarts a crashed producer with status: :stopped. So a producer that
+  # crashed while this worker held the lease stayed stopped for as long as the
+  # lease kept being renewed — in production (TD-6631) a one-second Repo pool
+  # exhaustion crashed 8 producers and one shard sat unconsumed for 65 hours,
+  # until pod turnover happened to move its lease. Every successful renewal now
+  # confirms the pipeline is running and starts it again if it is not.
+  #
+  # A completed shard's producer is :closed — or :stopped, if it crashed after
+  # closing — and there is nothing left to consume either way. Starting it
+  # would only make it re-close the shard, once per renewal, forever.
+  defp ensure_pipeline_running(state, %{completed: true}), do: state
+
+  defp ensure_pipeline_running(state, _shard_lease) do
+    state
+    |> state.pipeline.stopped?()
+    |> restart_pipeline(state)
+  end
+
+  defp restart_pipeline(false, state), do: %{state | pipeline_restarts: 0}
+
+  defp restart_pipeline(true, %{pipeline_restarts: previous_attempts} = state) do
+    state = %{state | pipeline_restarts: previous_attempts + 1}
+
+    Logger.warning(
+      "ShardLease: Pipeline is stopped while this worker holds the lease, starting it " <>
+        "(attempt #{state.pipeline_restarts}): [app_name: #{state.app_name}, " <>
+        "shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}]"
+    )
+
+    state
+    |> start_pipeline()
+    |> pipeline_restart_result(state)
+    |> report_pipeline_restart(state)
+  end
+
+  # Producer.start/1 replies :ok before it reads the lease (so a slow fetch
+  # cannot time out the caller), so :ok from the pipeline says nothing about
+  # whether the producer actually started: ask it. A producer that is busy
+  # fetching counts as started here (see Pipeline.stopped?/1).
+  defp pipeline_restart_result(:ok, state) do
+    state
+    |> state.pipeline.stopped?()
+    |> restart_outcome()
+  end
+
+  defp pipeline_restart_result(error, _state), do: {:error, error}
+
+  defp restart_outcome(false), do: :started
+  defp restart_outcome(true), do: :not_started
+
+  defp report_pipeline_restart(:started, state) do
+    Logger.info(
+      "ShardLease: Pipeline started after #{state.pipeline_restarts} attempt(s): " <>
+        "[app_name: #{state.app_name}, shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}]"
+    )
+
+    emit_pipeline_restart(:started, state)
+    notify({:pipeline_restarted, state}, state)
+
+    %{state | pipeline_restarts: 0}
+  end
+
+  defp report_pipeline_restart(:not_started, state) do
+    Logger.error(
+      "ShardLease: Pipeline is still stopped after start (attempt #{state.pipeline_restarts}), " <>
+        "the producer could not read its lease or found the shard closed; retrying on the " <>
+        "next renewal: [app_name: #{state.app_name}, shard_id: #{state.shard_id}, " <>
+        "lease_owner: #{state.lease_owner}]"
+    )
+
+    emit_pipeline_restart(:not_started, state)
+    notify({:pipeline_restart_failed, state}, state)
+
+    state
+  end
+
+  defp report_pipeline_restart({:error, error}, state) do
+    Logger.error(
+      "ShardLease: Failed to start pipeline (attempt #{state.pipeline_restarts}), retrying on " <>
+        "the next renewal: #{inspect(error)} [app_name: #{state.app_name}, " <>
+        "shard_id: #{state.shard_id}, lease_owner: #{state.lease_owner}]"
+    )
+
+    emit_pipeline_restart(:error, state)
+    notify({:pipeline_restart_failed, state}, state)
+
+    state
+  end
+
+  defp emit_pipeline_restart(result, state) do
+    :telemetry.execute(
+      @restart_telemetry_event,
+      %{attempt: state.pipeline_restarts},
+      %{
+        app_name: state.app_name,
+        stream_name: state.stream_name,
+        shard_id: state.shard_id,
+        lease_owner: state.lease_owner,
+        result: result
+      }
+    )
+  end
+
+  # A start that exits (the producer is busy or mid-restart) must not take this
+  # process down: that would restart the whole shard — producer included — on
+  # every renewal for as long as the condition lasts.
+  defp start_pipeline(state) do
+    state.pipeline.start(state)
+  catch
+    :exit, reason -> {:error, {:exit, reason}}
   end
 
   defp take_shard_lease(shard_lease, %{app_state_opts: opts, app_name: app_name} = state) do

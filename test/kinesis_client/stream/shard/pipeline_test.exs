@@ -75,6 +75,41 @@ defmodule KinesisClient.Stream.Shard.PipelineTest do
     assert_receive :get_lease_called, 1_000
   end
 
+  test "stopped?/1 is true until the producer is started" do
+    app_name = "stopped-pipeline-app"
+    stream_name = "pipeline-test-stream"
+    shard_id = "shard-1"
+    app_state = %{app_name: app_name, stream_name: stream_name, shard_id: shard_id}
+
+    opts = [
+      app_name: app_name,
+      stream_name: stream_name,
+      app_state_opts: [adapter: :test],
+      shard_id: shard_id,
+      kinesis_opts: [adapter: KinesisMock],
+      shard_consumer: KinesisClient.TestShardConsumer,
+      poll_interval: 60_000
+    ]
+
+    KinesisMock
+    |> stub(:get_shard_iterator, fn _, _, _, _ -> {:ok, %{"ShardIterator" => "foo"}} end)
+    |> stub(:get_records, fn _iterator, _opts ->
+      {:ok, %{"NextShardIterator" => "foo", "MillisBehindLatest" => 0, "Records" => []}}
+    end)
+
+    stub(AppStateMock, :get_lease, fn _, _, _, _ -> %ShardLease{checkpoint: nil} end)
+
+    {:ok, _pid} = start_supervised({Pipeline, opts})
+
+    assert Pipeline.stopped?(app_state)
+    assert :ok == Pipeline.start(app_state)
+    refute Pipeline.stopped?(app_state)
+  end
+
+  test "stopped?/1 is true for a pipeline that is not running" do
+    assert Pipeline.stopped?(%{app_name: "no-such-app", stream_name: "no-stream", shard_id: "s"})
+  end
+
   test "can stop producer" do
     app_name = "sdf9023kl"
     stream_name = "pipeline-test-stream"

@@ -4,7 +4,7 @@ defmodule KinesisClient.Mixfile do
   def project do
     [
       app: :kinesis_client,
-      version: "1.1.31",
+      version: "1.1.32",
       elixir: "~> 1.16",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -75,6 +75,7 @@ defmodule KinesisClient.Mixfile do
       {:postgrex, "~> 0.19", only: :test},
       {:retry, "~> 0.14"},
       {:sobelow, "~> 0.13", only: [:dev, :test], runtime: false},
+      {:telemetry, "~> 1.0"},
       {:styler, "~> 0.7", only: [:dev, :test], runtime: false}
     ]
   end

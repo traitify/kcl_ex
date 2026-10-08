@@ -240,6 +240,192 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
     end
   end
 
+  describe "status/1" do
+    test "reports :stopped until started, then :started" do
+      opts = producer_opts()
+      {:ok, producer} = start_supervised({Producer, opts})
+
+      assert Producer.status(producer) == :stopped
+
+      AppStateMock
+      |> stub(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        %{lease_owner: opts[:lease_owner], checkpoint: nil}
+      end)
+
+      KinesisMock
+      |> stub(:get_shard_iterator, fn _, _, _, _ -> {:ok, %{"ShardIterator" => "iterator"}} end)
+      |> stub(:get_records, fn _, _ ->
+        {:ok, %{"NextShardIterator" => "next", "MillisBehindLatest" => 0, "Records" => []}}
+      end)
+
+      assert :ok == Producer.start(producer)
+      assert Producer.status(producer) == :started
+    end
+  end
+
+  # TD-6631: a DBConnection.ConnectionError raised from the lease lookup
+  # crashed the producer; Broadway restarted it as :stopped and the shard sat
+  # idle until its lease moved. Lease lookups must never take the producer down.
+  describe "lease lookup failures" do
+    test ":start stays stopped and alive when the lease lookup raises" do
+      opts = producer_opts()
+      {:ok, producer} = start_supervised({Producer, opts})
+
+      AppStateMock
+      |> expect(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        raise DBConnection.ConnectionError, "connection not available"
+      end)
+
+      assert :ok == Producer.start(producer)
+      assert Producer.status(producer) == :stopped
+      assert Process.alive?(producer)
+    end
+
+    test "poll tick polls again instead of crashing when the lease lookup fails" do
+      opts = producer_opts(status: :started, poll_interval: 50)
+      {:ok, producer} = start_supervised({Producer, opts})
+
+      AppStateMock
+      |> expect(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        {:error, :timeout}
+      end)
+      |> expect(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        raise DBConnection.ConnectionError, "connection not available"
+      end)
+      |> stub(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        %{lease_owner: worker_ref()}
+      end)
+
+      # A poll tick is only honoured while a poll timer is recorded, so stand
+      # in for the (already fired) timer that delivered this tick.
+      :sys.replace_state(producer, fn %{state: state} = stage ->
+        fired_timer = Process.send_after(self(), :noop, 60_000)
+        Process.cancel_timer(fired_timer)
+        %{stage | state: %{state | poll_timer: fired_timer}}
+      end)
+
+      send(producer, :get_records)
+
+      # Three ticks: the original plus one rescheduled after each failure. The
+      # third sees another owner, which also polls again (no Kinesis call).
+      assert_receive :poll_timer_executed, 1_000
+      assert_receive :poll_timer_executed, 1_000
+      assert_receive :poll_timer_executed, 1_000
+      assert Process.alive?(producer)
+    end
+
+    test "poll tick keeps polling when the lease names another worker" do
+      opts = producer_opts(status: :started, poll_interval: 50)
+      {:ok, producer} = start_supervised({Producer, opts})
+      {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+      # A stale :not_owner reading (Dynamo get_item is eventually consistent)
+      # must not leave a :started producer idle with no poll timer — that is
+      # the TD-6631 stall again, and invisible to Pipeline.stopped?/1. No
+      # KinesisMock expectations: fetching while not owner would crash.
+      AppStateMock
+      |> expect(:get_lease, 2, fn _app_name, _stream_name, _shard_id, _opts ->
+        %{lease_owner: worker_ref()}
+      end)
+      |> stub(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        %{lease_owner: opts[:lease_owner], checkpoint: nil}
+      end)
+
+      KinesisMock
+      |> stub(:get_shard_iterator, fn _, _, _, _ -> {:ok, %{"ShardIterator" => "iterator"}} end)
+      |> stub(:get_records, fn _, _ ->
+        records = [%{"Data" => "after-stale-read", "SequenceNumber" => "1"}]
+        {:ok, %{"NextShardIterator" => "next", "MillisBehindLatest" => 0, "Records" => records}}
+      end)
+
+      # Demand arrives first; the fetch sees the stale owner and must poll again
+      # instead of idling. Once the row reads as ours, records flow.
+      GenStage.sync_subscribe(consumer, to: producer, max_demand: 10, min_demand: 0)
+
+      assert_receive :poll_timer_executed, 1_000
+      assert_receive :poll_timer_executed, 1_000
+      assert_receive {:consumer_events, [record]}, 1_000
+      assert record.data == "after-stale-read"
+      assert Process.alive?(producer)
+    end
+
+    test "poll tick with no pending demand waits for demand instead of fetching" do
+      opts = producer_opts(status: :started, poll_interval: 50)
+      {:ok, producer} = start_supervised({Producer, opts})
+
+      # No KinesisMock expectations: a fetch with limit: 0 would be an
+      # unexpected call and crash the producer.
+      AppStateMock
+      |> expect(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        %{lease_owner: opts[:lease_owner]}
+      end)
+
+      :sys.replace_state(producer, fn %{state: state} = stage ->
+        fired_timer = Process.send_after(self(), :noop, 60_000)
+        Process.cancel_timer(fired_timer)
+        %{stage | state: %{state | poll_timer: fired_timer}}
+      end)
+
+      send(producer, :get_records)
+
+      assert_receive :poll_timer_executed, 1_000
+      refute_receive :poll_timer_executed, 200
+      assert Process.alive?(producer)
+      assert :sys.get_state(producer).state.poll_timer == nil
+    end
+
+    test "fetch path polls again after poll_interval instead of blocking in retries" do
+      opts = producer_opts(status: :started, poll_interval: 50)
+      {:ok, producer} = start_supervised({Producer, opts})
+      {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+      KinesisMock
+      |> stub(:get_shard_iterator, fn _, _, _, _ -> {:ok, %{"ShardIterator" => "iterator"}} end)
+
+      # First ownership check (inside the fetch) fails; the next poll sees
+      # another owner and goes quiet.
+      AppStateMock
+      |> expect(:get_lease, fn _app_name, _stream_name, _shard_id, _opts -> {:error, :timeout} end)
+      |> stub(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        %{lease_owner: worker_ref()}
+      end)
+
+      {elapsed_us, _} =
+        :timer.tc(fn ->
+          GenStage.sync_subscribe(consumer, to: producer, max_demand: 10, min_demand: 0)
+          assert_receive :poll_timer_executed, 1_000
+        end)
+
+      # Well under the ~15s the @retry backoff would have taken.
+      assert elapsed_us < 1_000_000
+      refute_receive {:consumer_events, _}, 100
+      assert Process.alive?(producer)
+    end
+
+    test "keeps retrying failed messages while stopped when ownership cannot be verified" do
+      opts = producer_opts()
+      {:ok, producer} = start_supervised({Producer, opts})
+      {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+      AppStateMock
+      |> expect(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        raise DBConnection.ConnectionError, "connection not available"
+      end)
+
+      GenStage.sync_subscribe(consumer, to: producer)
+      assert_receive {:queuing_demand_while_stopped, _}, 1_000
+
+      failed = [
+        %Broadway.Message{data: "retry-me", acknowledger: {Broadway.NoopAcknowledger, nil, nil}}
+      ]
+
+      send(producer, {:ack, make_ref(), [], failed})
+
+      assert_receive {:consumer_events, ^failed}, 1_000
+      assert Process.alive?(producer)
+    end
+  end
+
   defp producer_opts(overrides \\ []) do
     opts = [
       app_name: "foo",

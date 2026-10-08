@@ -18,6 +18,7 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
   # on essentially every fresh deploy of a first/lone worker.
   @start_max_attempts 25
   @start_retry_interval 100
+  @status_timeout 1_000
 
   def start_link(opts) do
     producer_opts =
@@ -100,6 +101,34 @@ defmodule KinesisClient.Stream.Shard.Pipeline do
     |> pipeline_name()
     |> Broadway.producer_names()
     |> collect_errors(&Producer.stop/1)
+  end
+
+  @doc """
+  Whether any of the pipeline's producers is `:stopped`, or cannot be reached —
+  which is what a producer looks like while Broadway is restarting it.
+
+  Broadway restarts a crashed producer with the options it was started with,
+  i.e. `status: :stopped`, and nothing but `start/1` ever moves it on from
+  there. `KinesisClient.Stream.Shard.LeaseV2` polls this on every renewal so a
+  shard whose lease is still held does not stay idle after such a crash.
+  """
+  @spec stopped?(map()) :: boolean()
+  def stopped?(app_state) do
+    app_state
+    |> pipeline_name()
+    |> Broadway.producer_names()
+    |> Enum.any?(&producer_stopped?/1)
+  catch
+    :exit, _reason -> true
+  end
+
+  defp producer_stopped?(producer_name) do
+    Producer.status(producer_name, @status_timeout) == :stopped
+  catch
+    # Busy — e.g. inside a slow, retried Kinesis call — is not stopped.
+    :exit, {:timeout, _call} -> false
+    # Not registered: Broadway is restarting it, and it comes back :stopped.
+    :exit, _reason -> true
   end
 
   defp pipeline_name(app_state) do
