@@ -4,7 +4,7 @@ defmodule KinesisClient.Mixfile do
   def project do
     [
       app: :kinesis_client,
-      version: "1.1.33",
+      version: "1.1.34",
       elixir: "~> 1.16",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -55,16 +55,22 @@ defmodule KinesisClient.Mixfile do
   defp deps do
     [
       {:broadway, "~> 1.1.0"},
-      {:configparser_ex, "~> 5.0"},
+      {:configparser_ex, "~> 4.0 or ~> 5.0"},
       {:credo, "~> 1.0", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.0", only: [:dev], runtime: false},
       {:ecto_sql, "~> 3.6"},
-      {:ex_aws, "~> 2.7"},
+      # hackney, ex_aws and configparser_ex admit both the hackney 1.x and 4.x
+      # trees. Some consumers cannot leave hackney 1.x yet (httpoison 2.x and
+      # mc_feely v0.1.9 pin it, mc_feely also pins configparser_ex ~> 4.0), and a
+      # library cannot override for them. ex_aws 2.7.0 is the first release on
+      # hackney 4.x and needs configparser_ex 5.0; Hex pairs the right versions.
+      # This repo's own lock stays on hackney 4.x / ex_aws 2.7 for the advisories.
+      {:ex_aws, "~> 2.5"},
       {:ex_aws_dynamo, "~> 4.0"},
       {:ex_aws_kinesis, "~> 2.0"},
       {:excoveralls, "~> 0.10", only: :test},
       {:ex_doc, "~> 0.21", only: :dev, runtime: false},
-      {:hackney, "~> 4.0 and >= 4.0.2"},
+      {:hackney, "~> 1.16 or ~> 4.0 and >= 4.0.2"},
       {:jason, "~> 1.1"},
       {:mix_test_watch, "~> 1.0", only: :dev, runtime: false},
       # Pinned to the 1.0 line: mox 1.2's nimble_ownership-based verify_on_exit!
