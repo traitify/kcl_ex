@@ -90,6 +90,34 @@ Configuring dead letter queues and partitioning are dependent on your
 application's requirements and the structure of your data.
 
 
+## Monitoring
+
+A shard that is leased but not consuming is the failure mode to watch for
+(TD-6631: a producer crashed while its worker kept renewing the lease, and the
+shard sat idle for 65 hours while the stream-wide iterator age stayed at zero
+because the stuck producer made no `GetRecords` calls). The lease process now
+restarts a stopped producer on renewal, and reports it:
+
+- Telemetry event `[:kinesis_client, :shard, :pipeline_restart]` with
+  measurement `%{attempt: n}` and metadata `app_name`, `stream_name`,
+  `shard_id`, `lease_owner`, `result` (`:started`, `:not_started`, `:error`).
+  Alert on `result != :started` or on a rising `attempt`; a single
+  `:started` with `attempt: 1` is the self-heal working.
+- Log lines, all with `kcl_shard_id` / `kcl_lease_owner` metadata:
+  - `ShardLease: Pipeline is stopped while this worker holds the lease` (warning, each attempt)
+  - `ShardLease: Pipeline is still stopped after start` (error, the start did not take)
+  - `ShardLease: Failed to start pipeline` (error, the start exited)
+  - `unable to verify lease ownership` (error, from the producer: its lease
+    lookup failed and it is polling again instead of fetching)
+
+This check only sees a producer whose status is `:stopped`. A `:started`
+producer that is idle because its processors or batchers are blocked in a
+slow downstream call, or a `:closed` producer on a finished shard, reads as
+healthy. The robust signal for that is per-shard checkpoint staleness: a
+`shard_lease` row whose `lease_count` keeps increasing while `checkpoint`
+does not move and the shard is not `completed`. Alert on that from the
+consumer's database; this library does not emit it yet (TD-6636).
+
 ## Development
 
 the tests by default require

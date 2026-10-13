@@ -7,4 +7,8 @@ defmodule KinesisClient.TestPipeline do
   def stop(_opts) do
     :ok
   end
+
+  def stopped?(_opts) do
+    false
+  end
 end
