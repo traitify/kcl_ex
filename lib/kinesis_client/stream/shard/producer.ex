@@ -165,14 +165,8 @@ defmodule KinesisClient.Stream.Shard.Producer do
     %{metadata: %{"SequenceNumber" => checkpoint}} = successful_msgs |> Enum.reverse() |> hd()
 
     state =
-      state.app_name
-      |> AppState.update_checkpoint(
-        state.stream_name,
-        state.shard_id,
-        state.lease_owner,
-        checkpoint,
-        state.app_state_opts
-      )
+      state
+      |> update_checkpoint(checkpoint)
       |> case do
         :ok ->
           notify({:acked, %{checkpoint: checkpoint, success: successful_msgs, failed: []}}, state)
@@ -689,6 +683,26 @@ defmodule KinesisClient.Stream.Shard.Producer do
   # (TD-6631). Broadway restarts a crashed producer as :stopped, so a raise here
   # idles the shard until the lease process notices. Normalise both shapes so a
   # lease lookup can never take the producer down.
+  # Same boundary as fetch_lease/1, for the checkpoint write: the Ecto
+  # adapter raises on a pool timeout, and a producer that crashes mid-ack is
+  # restarted :stopped. The messages were already processed; a later ack
+  # checkpoints past them, so failing this write loses nothing but ordering a
+  # replay after a crash would.
+  defp update_checkpoint(state, checkpoint) do
+    AppState.update_checkpoint(
+      state.app_name,
+      state.stream_name,
+      state.shard_id,
+      state.lease_owner,
+      checkpoint,
+      state.app_state_opts
+    )
+  rescue
+    exception -> {:error, exception}
+  catch
+    :exit, reason -> {:error, {:exit, reason}}
+  end
+
   defp fetch_lease(state) do
     AppState.get_lease(state.app_name, state.stream_name, state.shard_id, state.app_state_opts)
   rescue

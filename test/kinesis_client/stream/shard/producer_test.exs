@@ -402,6 +402,44 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
       assert Process.alive?(producer)
     end
 
+    test "survives a checkpoint write that raises and keeps producing" do
+      opts = producer_opts(status: :started)
+      {:ok, producer} = start_supervised({Producer, opts})
+      {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+      # One batch, then empty polls: the producer keeps polling after the
+      # failed checkpoint, which is the point.
+      KinesisMock
+      |> stub(:get_shard_iterator, fn _, _, _, _ -> {:ok, %{"ShardIterator" => "iterator"}} end)
+      |> expect(:get_records, fn _, _ ->
+        records = [%{"Data" => "foo", "SequenceNumber" => "12345"}]
+        {:ok, %{"NextShardIterator" => "next", "MillisBehindLatest" => 0, "Records" => records}}
+      end)
+      |> stub(:get_records, fn _, _ ->
+        {:ok, %{"NextShardIterator" => "next", "MillisBehindLatest" => 0, "Records" => []}}
+      end)
+
+      # The checkpoint write hits an exhausted pool (the Ecto adapter raises),
+      # and the follow-up lease read fails the same way. Before the guard the
+      # producer crashed here and came back :stopped.
+      AppStateMock
+      |> stub(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        %{lease_owner: opts[:lease_owner]}
+      end)
+      |> expect(:update_checkpoint, fn _app_name, _stream_name, _shard_id, _owner, _cp, _opts ->
+        raise DBConnection.ConnectionError, "connection not available"
+      end)
+
+      GenStage.sync_subscribe(consumer, to: producer, max_demand: 10, min_demand: 0)
+      assert_receive {:consumer_events, events}, 1_000
+
+      send(producer, {:ack, make_ref(), events, []})
+
+      refute_receive {:acked, _}, 300
+      assert Process.alive?(producer)
+      assert Producer.status(producer) == :started
+    end
+
     test "keeps retrying failed messages while stopped when ownership cannot be verified" do
       opts = producer_opts()
       {:ok, producer} = start_supervised({Producer, opts})
