@@ -354,6 +354,19 @@ defmodule KinesisClient.Stream.Shard.Producer do
     {:noreply, [], state}
   end
 
+  # Nothing to fetch for: wait for demand instead of polling, since Kinesis
+  # rejects limit: 0. Every fetch goes through here, including start/1, which
+  # the lease process calls before Broadway has sent any demand.
+  # handle_demand/2 fetches as soon as a consumer asks for more; the shard
+  # iterator is fetched then too, so it is not left to expire meanwhile.
+  defp get_records(%__MODULE__{demand: demand} = state) when demand < 1 do
+    Logger.debug(
+      "No pending demand, waiting for demand: [stream_name: #{state.stream_name}, shard_id: #{state.shard_id}]"
+    )
+
+    {:noreply, [], %{state | poll_timer: nil}}
+  end
+
   defp get_records(%__MODULE__{shard_iterator: nil} = state) do
     state
     |> get_shard_iterator()
@@ -595,16 +608,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   defp stop_if_lease_lost(_not_found_or_error, state), do: state
 
-  # Nothing to fetch for: wait for demand instead of polling (Kinesis rejects
-  # limit: 0). handle_demand/2 fetches as soon as a consumer asks for more.
-  defp poll_for_records(:owner, %{demand: 0} = state) do
-    Logger.debug(
-      "No pending demand, waiting for demand: [stream_name: #{state.stream_name}, shard_id: #{state.shard_id}]"
-    )
-
-    {:noreply, [], %{state | poll_timer: nil}}
-  end
-
+  # get_records/1 waits for demand when there is none pending.
   defp poll_for_records(:owner, state) do
     Logger.debug(
       "Try to fulfill pending demand #{state.demand}: [stream_name: #{state.stream_name}, shard_id: #{state.shard_id}]"

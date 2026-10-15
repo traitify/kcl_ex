@@ -229,6 +229,11 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
         {:ok, %{"NextShardIterator" => "foo", "MillisBehindLatest" => 0, "Records" => []}}
       end)
 
+      # Queue demand while stopped so start/1 has something to fetch for.
+      {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+      GenStage.sync_subscribe(consumer, to: producer, max_demand: 10, min_demand: 0)
+      assert_receive {:queuing_demand_while_stopped, _}, 1_000
+
       {elapsed_us, reply} = :timer.tc(fn -> Producer.start(producer) end)
 
       assert reply == :ok
@@ -237,6 +242,43 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
       # The fetch is still in flight, which is the point: the reply did not wait.
       assert_receive {:fetch_started, producer_pid}, 1_000
       send(producer_pid, :release)
+    end
+
+    # A producer Broadway (re)started is :stopped with no demand until a
+    # consumer asks, and the lease process calls start/1 on its own schedule.
+    # Starting it then fetched with limit: 0, which Kinesis rejects with a
+    # ValidationException (seen on generic_assessment_service staging).
+    for {label, checkpoint} <- [{"no checkpoint", nil}, {"a checkpoint", "12345"}] do
+      test "with #{label} and no pending demand waits for demand instead of fetching" do
+        opts = producer_opts()
+        {:ok, producer} = start_supervised({Producer, opts})
+        test_pid = self()
+        checkpoint = unquote(checkpoint)
+
+        AppStateMock
+        |> stub(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+          %{lease_owner: opts[:lease_owner], checkpoint: checkpoint}
+        end)
+
+        KinesisMock
+        |> stub(:get_shard_iterator, fn _, _, _, _ -> {:ok, %{"ShardIterator" => "iterator"}} end)
+        |> stub(:get_records, fn _, kinesis_opts ->
+          send(test_pid, {:get_records, kinesis_opts[:limit]})
+          records = [%{"Data" => "foo", "SequenceNumber" => "12346"}]
+          {:ok, %{"NextShardIterator" => "next", "MillisBehindLatest" => 0, "Records" => records}}
+        end)
+
+        assert :ok == Producer.start(producer)
+        assert Producer.status(producer) == :started
+        refute_receive {:get_records, _limit}, 200
+
+        # Demand arriving later fetches right away, with a valid limit.
+        {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+        GenStage.sync_subscribe(consumer, to: producer, max_demand: 10, min_demand: 0)
+
+        assert_receive {:get_records, 10}, 1_000
+        assert_receive {:consumer_events, [%{data: "foo"}]}, 1_000
+      end
     end
   end
 
