@@ -118,6 +118,13 @@ healthy. The robust signal for that is per-shard checkpoint staleness: a
 does not move and the shard is not `completed`. Alert on that from the
 consumer's database; this library does not emit it yet (TD-6636).
 
+A `:started` producer with no pending demand waits for demand instead of
+calling `GetRecords`. Before 1.1.35, a producer started (or restarted by the
+lease process) before Broadway sent demand fetched with `limit: 0` and logged
+`encountered error when getting records: {"ValidationException", ...
+Member must have value greater than or equal to 1}`; that line should no
+longer appear.
+
 ## Development
 
 the tests by default require
