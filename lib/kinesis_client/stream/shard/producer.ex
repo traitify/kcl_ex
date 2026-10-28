@@ -23,6 +23,9 @@ defmodule KinesisClient.Stream.Shard.Producer do
     :shard_iterator,
     :shard_iterator_type,
     :starting_sequence_number,
+    # Last sequence number this producer checkpointed (or started from), so
+    # an expired iterator can be re-derived without re-reading the lease.
+    :last_checkpoint,
     :poll_interval,
     :poll_timer,
     :status,
@@ -176,7 +179,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
               "shard_id: #{state.shard_id} data: #{inspect(successful_msgs)}"
           )
 
-          state
+          %{state | last_checkpoint: checkpoint}
 
         {:error, error} ->
           shard_lease = fetch_lease(state)
@@ -301,6 +304,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
             state
             | status: :started,
               shard_iterator: nil,
+              last_checkpoint: seq_number,
               shard_iterator_type: :after_sequence_number,
               starting_sequence_number: seq_number
           })
@@ -406,6 +410,12 @@ defmodule KinesisClient.Stream.Shard.Producer do
     state.shard_iterator
     |> Kinesis.get_records(kinesis_opts)
     |> tap(&Logger.debug("Shard #{state.shard_id} Kinesis get_records_with_retry: #{inspect(&1)}"))
+    |> case do
+      # Not tagged :error so @retry does not spend ~15s re-sending an iterator
+      # that will never work again (see maybe_end_of_shard_reached/2).
+      {:error, {"ExpiredIteratorException", _message} = error} -> {:expired_iterator, error}
+      result -> result
+    end
   end
 
   defp fetch_records(:not_owner, _state, _kinesis_opts), do: {:ok, :lease_owner_changed}
@@ -424,6 +434,24 @@ defmodule KinesisClient.Stream.Shard.Producer do
     )
 
     {:noreply, [], reschedule_poll(state)}
+  end
+
+  # A shard iterator expires 5 minutes after it was issued. Reusing it fails
+  # every poll from then on, with no crash to restart from, so the shard sits
+  # idle until its lease moves. Drop it and re-derive the next one from the
+  # last checkpoint (or the configured start when nothing was checkpointed).
+  defp maybe_end_of_shard_reached({:expired_iterator, error}, state) do
+    Logger.warning(
+      "Shard #{state.shard_id} iterator expired, re-deriving it from checkpoint " <>
+        "#{inspect(state.last_checkpoint)}: #{inspect(error)}"
+    )
+
+    state =
+      %{state | shard_iterator: nil}
+      |> restart_from_last_checkpoint()
+      |> reschedule_poll()
+
+    {:noreply, [], state}
   end
 
   # Keep polling (see poll_for_records/2 for the :not_owner rationale).
@@ -481,6 +509,12 @@ defmodule KinesisClient.Stream.Shard.Producer do
     Logger.error("Shard #{shard_id} encountered error when getting records: #{inspect(error)}")
 
     {:noreply, [], reschedule_poll(state)}
+  end
+
+  defp restart_from_last_checkpoint(%{last_checkpoint: nil} = state), do: state
+
+  defp restart_from_last_checkpoint(%{last_checkpoint: checkpoint} = state) do
+    %{state | shard_iterator_type: :after_sequence_number, starting_sequence_number: checkpoint}
   end
 
   defp poll_timer({_, 0}, _poll_interval), do: nil

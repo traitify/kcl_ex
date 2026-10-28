@@ -176,6 +176,98 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
     assert state.status == :closed
   end
 
+  # TD-6722: a shard iterator expires after 5 minutes without a GetRecords
+  # call. Keeping the stale iterator made every later poll fail the same way,
+  # forever, with no checkpoint movement and no crash to restart from.
+  describe "ExpiredIteratorException" do
+    test "re-derives the iterator from the last checkpoint and keeps consuming" do
+      opts = producer_opts(poll_interval: 50)
+      {:ok, producer} = start_supervised({Producer, opts})
+      {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+      # Started from a lease checkpointed at "100"; the first iterator has
+      # expired by the time it is used.
+      KinesisMock
+      |> expect(:get_shard_iterator, fn _, _, :after_sequence_number, kinesis_opts ->
+        assert kinesis_opts[:starting_sequence_number] == "100"
+        {:ok, %{"ShardIterator" => "iterator-1"}}
+      end)
+      |> expect(:get_records, fn "iterator-1", _ ->
+        {:error, {"ExpiredIteratorException", "Iterator expired."}}
+      end)
+      |> expect(:get_shard_iterator, fn _, _, :after_sequence_number, kinesis_opts ->
+        assert kinesis_opts[:starting_sequence_number] == "100"
+        {:ok, %{"ShardIterator" => "iterator-2"}}
+      end)
+      |> expect(:get_records, fn "iterator-2", _ ->
+        records = [%{"Data" => "foo", "SequenceNumber" => "101"}]
+        {:ok, %{"NextShardIterator" => "iterator-3", "Records" => records}}
+      end)
+      |> stub(:get_records, fn iterator, _ ->
+        {:ok, %{"NextShardIterator" => iterator, "Records" => []}}
+      end)
+
+      AppStateMock
+      |> stub(:get_lease, fn _, _, _, _ ->
+        %{lease_owner: opts[:lease_owner], checkpoint: "100", completed: false}
+      end)
+      |> stub(:update_checkpoint, fn _, _, _, _, _, _ -> :ok end)
+
+      assert Producer.start(producer) == :ok
+
+      # Expiry must not block in @retry backoff (~15s) before the next fetch.
+      {elapsed_us, msg} =
+        :timer.tc(fn ->
+          GenStage.sync_subscribe(consumer, to: producer, max_demand: 1, min_demand: 0)
+
+          assert_receive {:consumer_events, [%{metadata: %{"SequenceNumber" => "101"}} = msg]},
+                         2_000
+
+          msg
+        end)
+
+      assert elapsed_us < 1_500_000
+
+      # A later ack moves the point the next expiry would restart from.
+      send(producer, {:ack, make_ref(), [msg], []})
+      assert_receive {:acked, %{checkpoint: "101"}}, 1_000
+      assert :sys.get_state(producer).state.last_checkpoint == "101"
+      assert Process.alive?(producer)
+    end
+
+    test "re-derives the iterator from the configured start when nothing is checkpointed" do
+      opts = producer_opts(status: :started, poll_interval: 50, shard_iterator_type: :latest)
+      {:ok, producer} = start_supervised({Producer, opts})
+      {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+      KinesisMock
+      |> expect(:get_shard_iterator, fn _, _, :latest, _ ->
+        {:ok, %{"ShardIterator" => "iterator-1"}}
+      end)
+      |> expect(:get_records, fn "iterator-1", _ ->
+        {:error, {"ExpiredIteratorException", "Iterator expired."}}
+      end)
+      |> expect(:get_shard_iterator, fn _, _, :latest, _ ->
+        {:ok, %{"ShardIterator" => "iterator-2"}}
+      end)
+      |> expect(:get_records, fn "iterator-2", _ ->
+        {:ok,
+         %{
+           "NextShardIterator" => "iterator-3",
+           "Records" => [%{"Data" => "foo", "SequenceNumber" => "1"}]
+         }}
+      end)
+
+      AppStateMock
+      |> stub(:get_lease, fn _, _, _, _ -> %{lease_owner: opts[:lease_owner]} end)
+
+      GenStage.sync_subscribe(consumer, to: producer, max_demand: 1, min_demand: 0)
+
+      assert_receive {:consumer_events, [%{metadata: %{"SequenceNumber" => "1"}}]}, 2_000
+      assert Process.alive?(producer)
+    end
+  end
+
   describe "test demand_limit in the state" do
     test "demand_limit is set correctly in the state when initializing" do
       opts = producer_opts(kinesis_opts: [limit: 1000])
