@@ -38,7 +38,10 @@ defmodule KinesisClient.Stream.Shard.Producer do
     :coordinator_name,
     :demand_limit,
     shutdown_delay: 300_000,
-    demand: 0
+    demand: 0,
+    # Records emitted to Broadway and not yet acked. A shard is marked
+    # completed only once this reaches 0 after the final fetch.
+    in_flight: 0
   ]
 
   def start_link(opts) do
@@ -192,15 +195,12 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
           stop_if_lease_lost(shard_lease, state)
       end
+      # Counted whether or not the checkpoint write succeeded: the messages
+      # were processed either way, and a failed write only delays the
+      # checkpoint — it must not leave a finished shard open forever.
+      |> acked(successful_msgs)
 
-    state =
-      state.status
-      |> case do
-        :closed -> if state.shard_closed_timer, do: state, else: handle_closed_shard(state)
-        _ -> state
-      end
-
-    {:noreply, [], state}
+    {:noreply, [], maybe_close_shard(state)}
   end
 
   @impl GenStage
@@ -235,6 +235,8 @@ defmodule KinesisClient.Stream.Shard.Producer do
       "Shard #{state.shard_id} - Acknowledged #{length(successful_msgs)} messages while stopped"
     )
 
+    state = acked(state, successful_msgs)
+
     state
     |> lease_ownership()
     |> retry_while_stopped(failed_msgs, state)
@@ -257,7 +259,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
           %{state | shard_closed_timer: nil}
       end
 
-    {:noreply, failed_msgs, state}
+    {:noreply, failed_msgs, acked(state, successful_msgs)}
   end
 
   @impl GenStage
@@ -375,7 +377,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
           "Shard #{state.shard_id} ResourceNotFoundException error: #{error_message} - state: #{inspect(state)}"
         )
 
-        state = handle_closed_shard(%{state | status: :closed})
+        state = maybe_close_shard(%{state | status: :closed})
 
         {:noreply, [], state}
 
@@ -467,9 +469,12 @@ defmodule KinesisClient.Stream.Shard.Producer do
          {:ok, %{"ChildShards" => _child_shards, "Records" => records}},
          state
        ) do
-    new_demand = state.demand - length(records)
-    state = handle_closed_shard(%{state | status: :closed, demand: new_demand})
     Logger.debug("Shard #{state.shard_id} has reached the end of the shard")
+
+    state =
+      %{state | status: :closed}
+      |> emitting(records)
+      |> maybe_close_shard()
 
     {:noreply, wrap_records(records), state}
   end
@@ -478,15 +483,12 @@ defmodule KinesisClient.Stream.Shard.Producer do
          {:ok, %{"NextShardIterator" => next_iterator, "Records" => records}},
          state
        ) do
-    new_demand = state.demand - length(records)
+    new_state = emitting(%{state | shard_iterator: next_iterator}, records)
 
-    new_state =
-      %{
-        state
-        | demand: new_demand,
-          poll_timer: poll_timer({records, new_demand}, state.poll_interval),
-          shard_iterator: next_iterator
-      }
+    new_state = %{
+      new_state
+      | poll_timer: poll_timer({records, new_state.demand}, state.poll_interval)
+    }
 
     {:noreply, wrap_records(records), new_state}
   end
@@ -576,6 +578,27 @@ defmodule KinesisClient.Stream.Shard.Producer do
       %Broadway.Message{data: data, metadata: metadata, acknowledger: acknowledger}
     end)
   end
+
+  defp emitting(state, records) do
+    count = length(records)
+    %{state | demand: state.demand - count, in_flight: state.in_flight + count}
+  end
+
+  # Acks for messages emitted before a stop/restart can still arrive after
+  # the restart re-fetched them, so never let the count go negative.
+  defp acked(state, successful_msgs) do
+    %{state | in_flight: max(state.in_flight - length(successful_msgs), 0)}
+  end
+
+  # The records of the final fetch — and any still outstanding from earlier
+  # ones — must be acked (and so checkpointed) before the lease is marked
+  # completed: nothing reads a completed shard again, so closing first would
+  # lose them if this worker died before the ack.
+  defp maybe_close_shard(%{status: :closed, in_flight: 0} = state) do
+    handle_closed_shard(state)
+  end
+
+  defp maybe_close_shard(state), do: state
 
   defp handle_closed_shard(%{status: :closed, shard_closed_timer: nil, shutdown_delay: delay} = s) do
     timer = Process.send_after(self(), :shard_closed, delay)

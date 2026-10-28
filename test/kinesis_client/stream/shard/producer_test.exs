@@ -268,6 +268,108 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
     end
   end
 
+  # TD-6722: the GetRecords response that carries ChildShards is the last one
+  # for the shard. Marking the lease completed before those records are acked
+  # loses them if the worker dies in between: no worker reads a completed
+  # shard again.
+  describe "end of shard" do
+    setup do
+      opts = producer_opts(status: :started, poll_interval: 50)
+      {:ok, producer} = start_supervised({Producer, opts})
+      {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+      test_pid = self()
+
+      AppStateMock
+      |> stub(:get_lease, fn _, _, _, _ -> %{lease_owner: opts[:lease_owner]} end)
+      |> stub(:update_checkpoint, fn _, _, _, _, _, _ -> :ok end)
+      |> stub(:close_shard, fn _, _, _, _, _ ->
+        send(test_pid, :close_shard_called)
+        :ok
+      end)
+
+      KinesisMock
+      |> stub(:get_shard_iterator, fn _, _, _, _ -> {:ok, %{"ShardIterator" => "iterator"}} end)
+
+      %{producer: producer, consumer: consumer}
+    end
+
+    test "marks the shard completed only once every tail record is acked", ctx do
+      records = [
+        %{"Data" => "a", "SequenceNumber" => "1"},
+        %{"Data" => "b", "SequenceNumber" => "2"}
+      ]
+
+      expect(KinesisMock, :get_records, fn _, _ ->
+        {:ok, %{"ChildShards" => [], "Records" => records}}
+      end)
+
+      GenStage.sync_subscribe(ctx.consumer, to: ctx.producer, max_demand: 10, min_demand: 0)
+      assert_receive {:consumer_events, [msg_a, msg_b]}, 1_000
+      assert :sys.get_state(ctx.producer).state.status == :closed
+      refute_receive :close_shard_called, 200
+
+      # Acked in two batches, as Broadway does
+      send(ctx.producer, {:ack, make_ref(), [msg_a], []})
+      assert_receive {:acked, %{checkpoint: "1"}}, 1_000
+      refute_receive :close_shard_called, 200
+
+      send(ctx.producer, {:ack, make_ref(), [msg_b], []})
+      assert_receive {:acked, %{checkpoint: "2"}}, 1_000
+      assert_receive :close_shard_called, 1_000
+    end
+
+    test "waits for records still in flight from earlier fetches", ctx do
+      KinesisMock
+      |> expect(:get_records, fn _, _ ->
+        {:ok,
+         %{"NextShardIterator" => "next", "Records" => [%{"Data" => "a", "SequenceNumber" => "1"}]}}
+      end)
+      |> expect(:get_records, fn _, _ -> {:ok, %{"ChildShards" => [], "Records" => []}} end)
+
+      GenStage.sync_subscribe(ctx.consumer, to: ctx.producer, max_demand: 10, min_demand: 0)
+      assert_receive {:consumer_events, [msg_a]}, 1_000
+
+      # The empty final response arrives on the follow-up poll
+      assert_receive :poll_timer_executed, 1_000
+      refute_receive :close_shard_called, 200
+      assert :sys.get_state(ctx.producer).state.status == :closed
+
+      send(ctx.producer, {:ack, make_ref(), [msg_a], []})
+      assert_receive :close_shard_called, 1_000
+    end
+
+    test "a failed tail record is retried before the shard is closed", ctx do
+      records = [
+        %{"Data" => "a", "SequenceNumber" => "1"},
+        %{"Data" => "b", "SequenceNumber" => "2"}
+      ]
+
+      expect(KinesisMock, :get_records, fn _, _ ->
+        {:ok, %{"ChildShards" => [], "Records" => records}}
+      end)
+
+      GenStage.sync_subscribe(ctx.consumer, to: ctx.producer, max_demand: 10, min_demand: 0)
+      assert_receive {:consumer_events, [msg_a, msg_b]}, 1_000
+
+      send(ctx.producer, {:ack, make_ref(), [msg_a], [msg_b]})
+      assert_receive {:consumer_events, [^msg_b]}, 1_000
+      refute_receive :close_shard_called, 200
+
+      send(ctx.producer, {:ack, make_ref(), [msg_b], []})
+      assert_receive :close_shard_called, 1_000
+    end
+
+    test "closes right away when the final response carries no records", ctx do
+      expect(KinesisMock, :get_records, fn _, _ ->
+        {:ok, %{"ChildShards" => [], "Records" => []}}
+      end)
+
+      GenStage.sync_subscribe(ctx.consumer, to: ctx.producer, max_demand: 10, min_demand: 0)
+      assert_receive :close_shard_called, 1_000
+    end
+  end
+
   describe "test demand_limit in the state" do
     test "demand_limit is set correctly in the state when initializing" do
       opts = producer_opts(kinesis_opts: [limit: 1000])
