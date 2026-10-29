@@ -744,6 +744,72 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
       # A poll stopped between its lease read and its fetch leaves one extra.
       assert lease_reads in fetches..(fetches + 1)
     end
+
+    test "max_poll_interval backs off consecutive empty polls" do
+      opts = producer_opts(status: :started, poll_interval: 20, max_poll_interval: 160)
+      {:ok, producer} = start_supervised({Producer, opts})
+      {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+      AppStateMock
+      |> stub(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        %{lease_owner: opts[:lease_owner]}
+      end)
+
+      GenStage.sync_subscribe(consumer, to: producer, max_demand: 10, min_demand: 0)
+      Process.sleep(700)
+
+      # Delays 20, 40, 80, 160, 160, ... after each empty fetch: ~6 ticks.
+      # A fixed 20ms interval would tick ~35 times.
+      assert count(:poll_timer_executed) in 4..8
+      assert Process.alive?(producer)
+    end
+
+    test "max_poll_interval resets to poll_interval once records arrive" do
+      test_pid = self()
+      opts = producer_opts(status: :started, poll_interval: 20, max_poll_interval: 10_000)
+      {:ok, producer} = start_supervised({Producer, opts})
+      {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+      AppStateMock
+      |> stub(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        %{lease_owner: opts[:lease_owner]}
+      end)
+
+      GenStage.sync_subscribe(consumer, to: producer, max_demand: 10, min_demand: 0)
+      Process.sleep(400)
+      assert :sys.get_state(producer).state.empty_polls > 0
+
+      stub(KinesisMock, :get_records, fn _, _ ->
+        send(test_pid, :fetched)
+        records = [%{"Data" => "foo", "SequenceNumber" => "1"}]
+        {:ok, %{"NextShardIterator" => "next", "MillisBehindLatest" => 0, "Records" => records}}
+      end)
+
+      # Backed off by now; fresh demand fetches immediately and finds records.
+      {:ok, late} = start_supervised({KinesisClient.TestConsumer, self()}, id: :late)
+      GenStage.sync_subscribe(late, to: producer, max_demand: 10, min_demand: 0)
+
+      assert_receive {:consumer_events, _}, 1_000
+      assert :sys.get_state(producer).state.empty_polls == 0
+    end
+
+    test "polls at a fixed poll_interval when max_poll_interval is not set" do
+      opts = producer_opts(status: :started, poll_interval: 50)
+      {:ok, producer} = start_supervised({Producer, opts})
+      {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+      AppStateMock
+      |> stub(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        %{lease_owner: opts[:lease_owner]}
+      end)
+
+      GenStage.sync_subscribe(consumer, to: producer, max_demand: 10, min_demand: 0)
+      flush(:poll_timer_executed)
+      Process.sleep(520)
+
+      assert count(:poll_timer_executed) in 8..11
+      assert Process.alive?(producer)
+    end
   end
 
   defp count(message, acc \\ 0) do

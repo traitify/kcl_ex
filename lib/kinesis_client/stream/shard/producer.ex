@@ -27,6 +27,9 @@ defmodule KinesisClient.Stream.Shard.Producer do
     # an expired iterator can be re-derived without re-reading the lease.
     :last_checkpoint,
     :poll_interval,
+    # When set, consecutive empty fetches back off from poll_interval up to
+    # this many ms; nil keeps a fixed poll_interval.
+    :max_poll_interval,
     :poll_timer,
     :status,
     :notify_pid,
@@ -39,6 +42,8 @@ defmodule KinesisClient.Stream.Shard.Producer do
     :demand_limit,
     shutdown_delay: 300_000,
     demand: 0,
+    # Consecutive fetches that returned no records; drives max_poll_interval.
+    empty_polls: 0,
     # Records emitted to Broadway and not yet acked. A shard is marked
     # completed only once this reaches 0 after the final fetch.
     in_flight: 0
@@ -80,6 +85,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
       app_state_opts: Keyword.get(opts, :app_state_opts, []),
       shard_iterator_type: Keyword.get(opts, :shard_iterator_type),
       poll_interval: Keyword.get(opts, :poll_interval, 5_000),
+      max_poll_interval: Keyword.get(opts, :max_poll_interval),
       notify_pid: Keyword.get(opts, :notify_pid),
       coordinator_name: opts[:coordinator_name],
       demand_limit: set_demand_limit(opts[:kinesis_opts])
@@ -521,16 +527,30 @@ defmodule KinesisClient.Stream.Shard.Producer do
   end
 
   # The only place a poll is armed after a fetch. Records mean more may be
-  # waiting, so poll again at once; an empty fetch waits poll_interval.
+  # waiting, so poll again at once; an empty fetch waits poll_interval, backing
+  # off towards max_poll_interval while the shard stays empty.
   defp schedule_next_poll(state, records) do
-    replace_poll_timer(state, next_poll_delay(state, records))
+    state
+    |> count_empty_poll(records)
+    |> then(&replace_poll_timer(&1, next_poll_delay(&1, records)))
   end
+
+  defp count_empty_poll(state, []), do: %{state | empty_polls: state.empty_polls + 1}
+  defp count_empty_poll(state, _records), do: %{state | empty_polls: 0}
 
   # No demand left: wait for handle_demand/2 rather than polling (Kinesis
   # rejects limit: 0).
   defp next_poll_delay(%{demand: 0}, _records), do: nil
-  defp next_poll_delay(state, []), do: state.poll_interval
+  defp next_poll_delay(state, []), do: empty_poll_delay(state)
   defp next_poll_delay(_state, _records), do: 0
+
+  defp empty_poll_delay(%{max_poll_interval: nil, poll_interval: interval}), do: interval
+
+  defp empty_poll_delay(%{max_poll_interval: max, poll_interval: interval, empty_polls: n}) do
+    (interval * Integer.pow(2, min(n - 1, 20)))
+    |> min(max)
+    |> max(interval)
+  end
 
   # Cancels the poll still pending before arming the next. handle_demand/2
   # fetches straight away, so without this a fetch made while a poll was

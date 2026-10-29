@@ -47,8 +47,15 @@ opts = [
   # optional, the maximum number of leases to steal per rebalance check.
   # Default: 1
   max_leases_to_steal: 1,
-  # optional poll_interval for getting records from kinesis
+  # optional, how long (ms) a shard waits after an empty GetRecords call
+  # before polling again; a call that returns records polls again at once.
+  # Each poll also reads the shard's lease, so a short interval costs CPU and
+  # AppState reads on every shard even when the stream is idle. Default: 5_000
   poll_interval: 500,
+  # optional, back off consecutive empty polls: the wait doubles from
+  # poll_interval up to this cap and resets when records arrive.
+  # Default: not set (fixed poll_interval)
+  max_poll_interval: 10_000,
   processors: [
     default: [
       concurrency: 1,

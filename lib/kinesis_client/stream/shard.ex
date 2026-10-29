@@ -42,6 +42,7 @@ defmodule KinesisClient.Stream.Shard do
       # production producers still use the default adapter and ex_aws config.
       |> optional_kw(:kinesis_opts, Keyword.get(opts, :kinesis_opts))
       |> optional_kw(:poll_interval, Keyword.get(opts, :poll_interval))
+      |> optional_kw(:max_poll_interval, Keyword.get(opts, :max_poll_interval))
       |> optional_kw(:shard_iterator_type, Keyword.get(opts, :shard_iterator_type))
       |> optional_kw(:timestamp, Keyword.get(opts, :timestamp))
 

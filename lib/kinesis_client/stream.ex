@@ -32,6 +32,12 @@ defmodule KinesisClient.Stream do
       The interval is jittered +/- 25%. Defaults to 6,000.
     * `:max_leases_to_steal`(optional) - The maximum number of leases to steal per rebalance
       check. Defaults to 1.
+    * `:poll_interval`(optional) - How long (in milliseconds) a shard waits after a `GetRecords`
+      call that returned no records before polling again. A call that returns records polls again
+      immediately. Defaults to 5,000.
+    * `:max_poll_interval`(optional) - When set, each consecutive empty `GetRecords` call doubles
+      the wait, starting at `:poll_interval` and capped at this value (in milliseconds); the wait
+      returns to `:poll_interval` as soon as records arrive. Not set by default (fixed interval).
   """
   def start_link(opts) do
     Supervisor.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -66,6 +72,7 @@ defmodule KinesisClient.Stream do
       |> optional_kw(:lease_renew_interval, Keyword.get(opts, :lease_renew_interval))
       |> optional_kw(:lease_expiry, Keyword.get(opts, :lease_expiry))
       |> optional_kw(:poll_interval, Keyword.get(opts, :poll_interval))
+      |> optional_kw(:max_poll_interval, Keyword.get(opts, :max_poll_interval))
       |> optional_kw(:shard_iterator_type, Keyword.get(opts, :shard_iterator_type))
       |> optional_kw(:timestamp, Keyword.get(opts, :timestamp))
 
