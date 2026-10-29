@@ -47,8 +47,15 @@ opts = [
   # optional, the maximum number of leases to steal per rebalance check.
   # Default: 1
   max_leases_to_steal: 1,
-  # optional poll_interval for getting records from kinesis
+  # optional, how long (ms) a shard waits after an empty GetRecords call
+  # before polling again; a call that returns records polls again at once.
+  # Each poll also reads the shard's lease, so a short interval costs CPU and
+  # AppState reads on every shard even when the stream is idle. Default: 5_000
   poll_interval: 500,
+  # optional, back off consecutive empty polls: the wait doubles from
+  # poll_interval up to this cap and resets when records arrive.
+  # Default: not set (fixed poll_interval)
+  max_poll_interval: 10_000,
   processors: [
     default: [
       concurrency: 1,
@@ -109,6 +116,10 @@ restarts a stopped producer on renewal, and reports it:
   - `ShardLease: Failed to start pipeline` (error, the start exited)
   - `unable to verify lease ownership` (error, from the producer: its lease
     lookup failed and it is polling again instead of fetching)
+  - `iterator expired, re-deriving it from checkpoint` (warning, from the
+    producer: a shard iterator went unused for over five minutes and was
+    replaced from the last checkpoint; frequent occurrences mean the consumer
+    is pausing for longer than Kinesis allows, TD-6722)
 
 This check only sees a producer whose status is `:stopped`. A `:started`
 producer that is idle because its processors or batchers are blocked in a

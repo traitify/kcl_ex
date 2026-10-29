@@ -176,6 +176,200 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
     assert state.status == :closed
   end
 
+  # TD-6722: a shard iterator expires after 5 minutes without a GetRecords
+  # call. Keeping the stale iterator made every later poll fail the same way,
+  # forever, with no checkpoint movement and no crash to restart from.
+  describe "ExpiredIteratorException" do
+    test "re-derives the iterator from the last checkpoint and keeps consuming" do
+      opts = producer_opts(poll_interval: 50)
+      {:ok, producer} = start_supervised({Producer, opts})
+      {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+      # Started from a lease checkpointed at "100"; the first iterator has
+      # expired by the time it is used.
+      KinesisMock
+      |> expect(:get_shard_iterator, fn _, _, :after_sequence_number, kinesis_opts ->
+        assert kinesis_opts[:starting_sequence_number] == "100"
+        {:ok, %{"ShardIterator" => "iterator-1"}}
+      end)
+      |> expect(:get_records, fn "iterator-1", _ ->
+        {:error, {"ExpiredIteratorException", "Iterator expired."}}
+      end)
+      |> expect(:get_shard_iterator, fn _, _, :after_sequence_number, kinesis_opts ->
+        assert kinesis_opts[:starting_sequence_number] == "100"
+        {:ok, %{"ShardIterator" => "iterator-2"}}
+      end)
+      |> expect(:get_records, fn "iterator-2", _ ->
+        records = [%{"Data" => "foo", "SequenceNumber" => "101"}]
+        {:ok, %{"NextShardIterator" => "iterator-3", "Records" => records}}
+      end)
+      |> stub(:get_records, fn iterator, _ ->
+        {:ok, %{"NextShardIterator" => iterator, "Records" => []}}
+      end)
+
+      AppStateMock
+      |> stub(:get_lease, fn _, _, _, _ ->
+        %{lease_owner: opts[:lease_owner], checkpoint: "100", completed: false}
+      end)
+      |> stub(:update_checkpoint, fn _, _, _, _, _, _ -> :ok end)
+
+      assert Producer.start(producer) == :ok
+
+      # Expiry must not block in @retry backoff (~15s) before the next fetch.
+      {elapsed_us, msg} =
+        :timer.tc(fn ->
+          GenStage.sync_subscribe(consumer, to: producer, max_demand: 1, min_demand: 0)
+
+          assert_receive {:consumer_events, [%{metadata: %{"SequenceNumber" => "101"}} = msg]},
+                         2_000
+
+          msg
+        end)
+
+      assert elapsed_us < 1_500_000
+
+      # A later ack moves the point the next expiry would restart from.
+      send(producer, {:ack, make_ref(), [msg], []})
+      assert_receive {:acked, %{checkpoint: "101"}}, 1_000
+      assert :sys.get_state(producer).state.last_checkpoint == "101"
+      assert Process.alive?(producer)
+    end
+
+    test "re-derives the iterator from the configured start when nothing is checkpointed" do
+      opts = producer_opts(status: :started, poll_interval: 50, shard_iterator_type: :latest)
+      {:ok, producer} = start_supervised({Producer, opts})
+      {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+      KinesisMock
+      |> expect(:get_shard_iterator, fn _, _, :latest, _ ->
+        {:ok, %{"ShardIterator" => "iterator-1"}}
+      end)
+      |> expect(:get_records, fn "iterator-1", _ ->
+        {:error, {"ExpiredIteratorException", "Iterator expired."}}
+      end)
+      |> expect(:get_shard_iterator, fn _, _, :latest, _ ->
+        {:ok, %{"ShardIterator" => "iterator-2"}}
+      end)
+      |> expect(:get_records, fn "iterator-2", _ ->
+        {:ok,
+         %{
+           "NextShardIterator" => "iterator-3",
+           "Records" => [%{"Data" => "foo", "SequenceNumber" => "1"}]
+         }}
+      end)
+
+      AppStateMock
+      |> stub(:get_lease, fn _, _, _, _ -> %{lease_owner: opts[:lease_owner]} end)
+
+      GenStage.sync_subscribe(consumer, to: producer, max_demand: 1, min_demand: 0)
+
+      assert_receive {:consumer_events, [%{metadata: %{"SequenceNumber" => "1"}}]}, 2_000
+      assert Process.alive?(producer)
+    end
+  end
+
+  # TD-6722: the GetRecords response that carries ChildShards is the last one
+  # for the shard. Marking the lease completed before those records are acked
+  # loses them if the worker dies in between: no worker reads a completed
+  # shard again.
+  describe "end of shard" do
+    setup do
+      opts = producer_opts(status: :started, poll_interval: 50)
+      {:ok, producer} = start_supervised({Producer, opts})
+      {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+      test_pid = self()
+
+      AppStateMock
+      |> stub(:get_lease, fn _, _, _, _ -> %{lease_owner: opts[:lease_owner]} end)
+      |> stub(:update_checkpoint, fn _, _, _, _, _, _ -> :ok end)
+      |> stub(:close_shard, fn _, _, _, _, _ ->
+        send(test_pid, :close_shard_called)
+        :ok
+      end)
+
+      KinesisMock
+      |> stub(:get_shard_iterator, fn _, _, _, _ -> {:ok, %{"ShardIterator" => "iterator"}} end)
+
+      %{producer: producer, consumer: consumer}
+    end
+
+    test "marks the shard completed only once every tail record is acked", ctx do
+      records = [
+        %{"Data" => "a", "SequenceNumber" => "1"},
+        %{"Data" => "b", "SequenceNumber" => "2"}
+      ]
+
+      expect(KinesisMock, :get_records, fn _, _ ->
+        {:ok, %{"ChildShards" => [], "Records" => records}}
+      end)
+
+      GenStage.sync_subscribe(ctx.consumer, to: ctx.producer, max_demand: 10, min_demand: 0)
+      assert_receive {:consumer_events, [msg_a, msg_b]}, 1_000
+      assert :sys.get_state(ctx.producer).state.status == :closed
+      refute_receive :close_shard_called, 200
+
+      # Acked in two batches, as Broadway does
+      send(ctx.producer, {:ack, make_ref(), [msg_a], []})
+      assert_receive {:acked, %{checkpoint: "1"}}, 1_000
+      refute_receive :close_shard_called, 200
+
+      send(ctx.producer, {:ack, make_ref(), [msg_b], []})
+      assert_receive {:acked, %{checkpoint: "2"}}, 1_000
+      assert_receive :close_shard_called, 1_000
+    end
+
+    test "waits for records still in flight from earlier fetches", ctx do
+      KinesisMock
+      |> expect(:get_records, fn _, _ ->
+        {:ok,
+         %{"NextShardIterator" => "next", "Records" => [%{"Data" => "a", "SequenceNumber" => "1"}]}}
+      end)
+      |> expect(:get_records, fn _, _ -> {:ok, %{"ChildShards" => [], "Records" => []}} end)
+
+      GenStage.sync_subscribe(ctx.consumer, to: ctx.producer, max_demand: 10, min_demand: 0)
+      assert_receive {:consumer_events, [msg_a]}, 1_000
+
+      # The empty final response arrives on the follow-up poll
+      assert_receive :poll_timer_executed, 1_000
+      refute_receive :close_shard_called, 200
+      assert :sys.get_state(ctx.producer).state.status == :closed
+
+      send(ctx.producer, {:ack, make_ref(), [msg_a], []})
+      assert_receive :close_shard_called, 1_000
+    end
+
+    test "a failed tail record is retried before the shard is closed", ctx do
+      records = [
+        %{"Data" => "a", "SequenceNumber" => "1"},
+        %{"Data" => "b", "SequenceNumber" => "2"}
+      ]
+
+      expect(KinesisMock, :get_records, fn _, _ ->
+        {:ok, %{"ChildShards" => [], "Records" => records}}
+      end)
+
+      GenStage.sync_subscribe(ctx.consumer, to: ctx.producer, max_demand: 10, min_demand: 0)
+      assert_receive {:consumer_events, [msg_a, msg_b]}, 1_000
+
+      send(ctx.producer, {:ack, make_ref(), [msg_a], [msg_b]})
+      assert_receive {:consumer_events, [^msg_b]}, 1_000
+      refute_receive :close_shard_called, 200
+
+      send(ctx.producer, {:ack, make_ref(), [msg_b], []})
+      assert_receive :close_shard_called, 1_000
+    end
+
+    test "closes right away when the final response carries no records", ctx do
+      expect(KinesisMock, :get_records, fn _, _ ->
+        {:ok, %{"ChildShards" => [], "Records" => []}}
+      end)
+
+      GenStage.sync_subscribe(ctx.consumer, to: ctx.producer, max_demand: 10, min_demand: 0)
+      assert_receive :close_shard_called, 1_000
+    end
+  end
+
   describe "test demand_limit in the state" do
     test "demand_limit is set correctly in the state when initializing" do
       opts = producer_opts(kinesis_opts: [limit: 1000])
@@ -296,12 +490,16 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
         %{lease_owner: worker_ref()}
       end)
 
+      KinesisMock
+      |> stub(:get_shard_iterator, fn _, _, _, _ -> {:ok, %{"ShardIterator" => "iterator"}} end)
+
       # A poll tick is only honoured while a poll timer is recorded, so stand
-      # in for the (already fired) timer that delivered this tick.
+      # in for the (already fired) timer that delivered this tick. The lease is
+      # read by the fetch, which only runs with demand pending.
       :sys.replace_state(producer, fn %{state: state} = stage ->
         fired_timer = Process.send_after(self(), :noop, 60_000)
         Process.cancel_timer(fired_timer)
-        %{stage | state: %{state | poll_timer: fired_timer}}
+        %{stage | state: %{state | poll_timer: fired_timer, demand: 10}}
       end)
 
       send(producer, :get_records)
@@ -354,11 +552,9 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
       {:ok, producer} = start_supervised({Producer, opts})
 
       # No KinesisMock expectations: a fetch with limit: 0 would be an
-      # unexpected call and crash the producer.
-      AppStateMock
-      |> expect(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
-        %{lease_owner: opts[:lease_owner]}
-      end)
+      # unexpected call and crash the producer. Nothing to fetch also means
+      # nothing to check the lease for.
+      expect(AppStateMock, :get_lease, 0, fn _, _, _, _ -> flunk("lease read") end)
 
       :sys.replace_state(producer, fn %{state: state} = stage ->
         fired_timer = Process.send_after(self(), :noop, 60_000)
@@ -463,6 +659,168 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
       assert Process.alive?(producer)
     end
   end
+
+  describe "poll scheduling" do
+    setup do
+      test_pid = self()
+
+      KinesisMock
+      |> stub(:get_shard_iterator, fn _, _, _, _ -> {:ok, %{"ShardIterator" => "iterator"}} end)
+      |> stub(:get_records, fn _, _ ->
+        send(test_pid, :fetched)
+        {:ok, %{"NextShardIterator" => "next", "MillisBehindLatest" => 0, "Records" => []}}
+      end)
+
+      :ok
+    end
+
+    test "new demand while a poll is pending does not start a second poll loop" do
+      opts = producer_opts(status: :started, poll_interval: 100)
+      {:ok, producer} = start_supervised({Producer, opts})
+      {:ok, first} = start_supervised({KinesisClient.TestConsumer, self()}, id: :first)
+      {:ok, second} = start_supervised({KinesisClient.TestConsumer, self()}, id: :second)
+
+      AppStateMock
+      |> stub(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        %{lease_owner: opts[:lease_owner]}
+      end)
+
+      # Each subscription delivers demand, and each demand fetches right away
+      # and arms a poll. Before the fix the second arm left the first timer
+      # running, so the shard was polled by two self-renewing loops.
+      GenStage.sync_subscribe(first, to: producer, max_demand: 10, min_demand: 0)
+      assert_receive :fetched, 1_000
+      GenStage.sync_subscribe(second, to: producer, max_demand: 10, min_demand: 0)
+      assert_receive :fetched, 1_000
+
+      flush(:poll_timer_executed)
+      Process.sleep(1_050)
+
+      # One loop at 100ms ticks ~10 times in this window; two would tick ~20.
+      assert count(:poll_timer_executed) in 8..12
+    end
+
+    test "a stray tick while the recorded poll is still pending is ignored" do
+      opts = producer_opts(status: :started, poll_interval: 60_000)
+      {:ok, producer} = start_supervised({Producer, opts})
+
+      # No AppState or Kinesis expectations are consumed: honouring the tick
+      # would read the lease and fetch.
+      expect(AppStateMock, :get_lease, 0, fn _, _, _, _ -> flunk("lease read") end)
+
+      :sys.replace_state(producer, fn %{state: state} = stage ->
+        pending = Process.send_after(self(), :noop, 60_000)
+        %{stage | state: %{state | poll_timer: pending, demand: 10}}
+      end)
+
+      send(producer, :get_records)
+
+      refute_receive :poll_timer_executed, 200
+      refute_received :fetched
+      assert Process.alive?(producer)
+    end
+
+    test "reads the lease once per poll" do
+      test_pid = self()
+      opts = producer_opts(status: :started, poll_interval: 50)
+      {:ok, producer} = start_supervised({Producer, opts})
+      {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+      AppStateMock
+      |> stub(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        send(test_pid, :lease_read)
+        %{lease_owner: opts[:lease_owner]}
+      end)
+
+      GenStage.sync_subscribe(consumer, to: producer, max_demand: 10, min_demand: 0)
+      Process.sleep(500)
+      stop_supervised!(Producer)
+      refute Process.alive?(producer)
+
+      fetches = count(:fetched)
+      lease_reads = count(:lease_read)
+
+      assert fetches >= 5
+      # A poll stopped between its lease read and its fetch leaves one extra.
+      assert lease_reads in fetches..(fetches + 1)
+    end
+
+    test "max_poll_interval backs off consecutive empty polls" do
+      opts = producer_opts(status: :started, poll_interval: 20, max_poll_interval: 160)
+      {:ok, producer} = start_supervised({Producer, opts})
+      {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+      AppStateMock
+      |> stub(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        %{lease_owner: opts[:lease_owner]}
+      end)
+
+      GenStage.sync_subscribe(consumer, to: producer, max_demand: 10, min_demand: 0)
+      Process.sleep(700)
+
+      # Delays 20, 40, 80, 160, 160, ... after each empty fetch: ~6 ticks.
+      # A fixed 20ms interval would tick ~35 times.
+      assert count(:poll_timer_executed) in 4..8
+      assert Process.alive?(producer)
+    end
+
+    test "max_poll_interval resets to poll_interval once records arrive" do
+      test_pid = self()
+      opts = producer_opts(status: :started, poll_interval: 20, max_poll_interval: 10_000)
+      {:ok, producer} = start_supervised({Producer, opts})
+      {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+      AppStateMock
+      |> stub(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        %{lease_owner: opts[:lease_owner]}
+      end)
+
+      GenStage.sync_subscribe(consumer, to: producer, max_demand: 10, min_demand: 0)
+      Process.sleep(400)
+      assert :sys.get_state(producer).state.empty_polls > 0
+
+      stub(KinesisMock, :get_records, fn _, _ ->
+        send(test_pid, :fetched)
+        records = [%{"Data" => "foo", "SequenceNumber" => "1"}]
+        {:ok, %{"NextShardIterator" => "next", "MillisBehindLatest" => 0, "Records" => records}}
+      end)
+
+      # Backed off by now; fresh demand fetches immediately and finds records.
+      {:ok, late} = start_supervised({KinesisClient.TestConsumer, self()}, id: :late)
+      GenStage.sync_subscribe(late, to: producer, max_demand: 10, min_demand: 0)
+
+      assert_receive {:consumer_events, _}, 1_000
+      assert :sys.get_state(producer).state.empty_polls == 0
+    end
+
+    test "polls at a fixed poll_interval when max_poll_interval is not set" do
+      opts = producer_opts(status: :started, poll_interval: 50)
+      {:ok, producer} = start_supervised({Producer, opts})
+      {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
+
+      AppStateMock
+      |> stub(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
+        %{lease_owner: opts[:lease_owner]}
+      end)
+
+      GenStage.sync_subscribe(consumer, to: producer, max_demand: 10, min_demand: 0)
+      flush(:poll_timer_executed)
+      Process.sleep(520)
+
+      assert count(:poll_timer_executed) in 8..11
+      assert Process.alive?(producer)
+    end
+  end
+
+  defp count(message, acc \\ 0) do
+    receive do
+      ^message -> count(message, acc + 1)
+    after
+      0 -> acc
+    end
+  end
+
+  defp flush(message), do: count(message)
 
   defp producer_opts(overrides \\ []) do
     opts = [

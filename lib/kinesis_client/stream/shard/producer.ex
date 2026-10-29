@@ -23,7 +23,13 @@ defmodule KinesisClient.Stream.Shard.Producer do
     :shard_iterator,
     :shard_iterator_type,
     :starting_sequence_number,
+    # Last sequence number this producer checkpointed (or started from), so
+    # an expired iterator can be re-derived without re-reading the lease.
+    :last_checkpoint,
     :poll_interval,
+    # When set, consecutive empty fetches back off from poll_interval up to
+    # this many ms; nil keeps a fixed poll_interval.
+    :max_poll_interval,
     :poll_timer,
     :status,
     :notify_pid,
@@ -35,7 +41,12 @@ defmodule KinesisClient.Stream.Shard.Producer do
     :coordinator_name,
     :demand_limit,
     shutdown_delay: 300_000,
-    demand: 0
+    demand: 0,
+    # Consecutive fetches that returned no records; drives max_poll_interval.
+    empty_polls: 0,
+    # Records emitted to Broadway and not yet acked. A shard is marked
+    # completed only once this reaches 0 after the final fetch.
+    in_flight: 0
   ]
 
   def start_link(opts) do
@@ -74,6 +85,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
       app_state_opts: Keyword.get(opts, :app_state_opts, []),
       shard_iterator_type: Keyword.get(opts, :shard_iterator_type),
       poll_interval: Keyword.get(opts, :poll_interval, 5_000),
+      max_poll_interval: Keyword.get(opts, :max_poll_interval),
       notify_pid: Keyword.get(opts, :notify_pid),
       coordinator_name: opts[:coordinator_name],
       demand_limit: set_demand_limit(opts[:kinesis_opts])
@@ -138,11 +150,9 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @impl GenStage
   def handle_info(:get_records, state) do
-    notify(:poll_timer_executed, state)
-
-    state
-    |> lease_ownership()
-    |> poll_for_records(state)
+    state.poll_timer
+    |> Process.read_timer()
+    |> handle_poll_tick(state)
   end
 
   @impl GenStage
@@ -176,7 +186,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
               "shard_id: #{state.shard_id} data: #{inspect(successful_msgs)}"
           )
 
-          state
+          %{state | last_checkpoint: checkpoint}
 
         {:error, error} ->
           shard_lease = fetch_lease(state)
@@ -189,15 +199,12 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
           stop_if_lease_lost(shard_lease, state)
       end
+      # Counted whether or not the checkpoint write succeeded: the messages
+      # were processed either way, and a failed write only delays the
+      # checkpoint — it must not leave a finished shard open forever.
+      |> acked(successful_msgs)
 
-    state =
-      state.status
-      |> case do
-        :closed -> if state.shard_closed_timer, do: state, else: handle_closed_shard(state)
-        _ -> state
-      end
-
-    {:noreply, [], state}
+    {:noreply, [], maybe_close_shard(state)}
   end
 
   @impl GenStage
@@ -232,6 +239,8 @@ defmodule KinesisClient.Stream.Shard.Producer do
       "Shard #{state.shard_id} - Acknowledged #{length(successful_msgs)} messages while stopped"
     )
 
+    state = acked(state, successful_msgs)
+
     state
     |> lease_ownership()
     |> retry_while_stopped(failed_msgs, state)
@@ -254,7 +263,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
           %{state | shard_closed_timer: nil}
       end
 
-    {:noreply, failed_msgs, state}
+    {:noreply, failed_msgs, acked(state, successful_msgs)}
   end
 
   @impl GenStage
@@ -301,6 +310,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
             state
             | status: :started,
               shard_iterator: nil,
+              last_checkpoint: seq_number,
               shard_iterator_type: :after_sequence_number,
               starting_sequence_number: seq_number
           })
@@ -371,7 +381,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
           "Shard #{state.shard_id} ResourceNotFoundException error: #{error_message} - state: #{inspect(state)}"
         )
 
-        state = handle_closed_shard(%{state | status: :closed})
+        state = maybe_close_shard(%{state | status: :closed})
 
         {:noreply, [], state}
 
@@ -406,6 +416,12 @@ defmodule KinesisClient.Stream.Shard.Producer do
     state.shard_iterator
     |> Kinesis.get_records(kinesis_opts)
     |> tap(&Logger.debug("Shard #{state.shard_id} Kinesis get_records_with_retry: #{inspect(&1)}"))
+    |> case do
+      # Not tagged :error so @retry does not spend ~15s re-sending an iterator
+      # that will never work again (see maybe_end_of_shard_reached/2).
+      {:error, {"ExpiredIteratorException", _message} = error} -> {:expired_iterator, error}
+      result -> result
+    end
   end
 
   defp fetch_records(:not_owner, _state, _kinesis_opts), do: {:ok, :lease_owner_changed}
@@ -426,7 +442,30 @@ defmodule KinesisClient.Stream.Shard.Producer do
     {:noreply, [], reschedule_poll(state)}
   end
 
-  # Keep polling (see poll_for_records/2 for the :not_owner rationale).
+  # A shard iterator expires 5 minutes after it was issued. Reusing it fails
+  # every poll from then on, with no crash to restart from, so the shard sits
+  # idle until its lease moves. Drop it and re-derive the next one from the
+  # last checkpoint (or the configured start when nothing was checkpointed).
+  defp maybe_end_of_shard_reached({:expired_iterator, error}, state) do
+    Logger.warning(
+      "Shard #{state.shard_id} iterator expired, re-deriving it from checkpoint " <>
+        "#{inspect(state.last_checkpoint)}: #{inspect(error)}"
+    )
+
+    state =
+      %{state | shard_iterator: nil}
+      |> restart_from_last_checkpoint()
+      |> reschedule_poll()
+
+    {:noreply, [], state}
+  end
+
+  # Keep polling rather than going idle: a :not_owner reading can be stale
+  # (Dynamo get_item is eventually consistent, so a producer started right
+  # after its worker took the lease can read the previous owner), and an idle
+  # :started producer is invisible to the lease process's stopped? check. If
+  # ownership really changed, the lease process stops us at its next tick and
+  # the stopped clause ignores the remaining ticks.
   defp maybe_end_of_shard_reached({:ok, :lease_owner_changed}, state) do
     Logger.debug(
       "#{inspect(state.lease_owner)} no longer has the shard #{state.shard_id}, not getting records"
@@ -439,9 +478,12 @@ defmodule KinesisClient.Stream.Shard.Producer do
          {:ok, %{"ChildShards" => _child_shards, "Records" => records}},
          state
        ) do
-    new_demand = state.demand - length(records)
-    state = handle_closed_shard(%{state | status: :closed, demand: new_demand})
     Logger.debug("Shard #{state.shard_id} has reached the end of the shard")
+
+    state =
+      %{state | status: :closed}
+      |> emitting(records)
+      |> maybe_close_shard()
 
     {:noreply, wrap_records(records), state}
   end
@@ -450,15 +492,10 @@ defmodule KinesisClient.Stream.Shard.Producer do
          {:ok, %{"NextShardIterator" => next_iterator, "Records" => records}},
          state
        ) do
-    new_demand = state.demand - length(records)
-
     new_state =
-      %{
-        state
-        | demand: new_demand,
-          poll_timer: poll_timer({records, new_demand}, state.poll_interval),
-          shard_iterator: next_iterator
-      }
+      %{state | shard_iterator: next_iterator}
+      |> emitting(records)
+      |> schedule_next_poll(records)
 
     {:noreply, wrap_records(records), new_state}
   end
@@ -483,9 +520,54 @@ defmodule KinesisClient.Stream.Shard.Producer do
     {:noreply, [], reschedule_poll(state)}
   end
 
-  defp poll_timer({_, 0}, _poll_interval), do: nil
-  defp poll_timer({[], _}, poll_interval), do: schedule_shard_poll(poll_interval)
-  defp poll_timer(_, _poll_interval), do: schedule_shard_poll(0)
+  defp restart_from_last_checkpoint(%{last_checkpoint: nil} = state), do: state
+
+  defp restart_from_last_checkpoint(%{last_checkpoint: checkpoint} = state) do
+    %{state | shard_iterator_type: :after_sequence_number, starting_sequence_number: checkpoint}
+  end
+
+  # The only place a poll is armed after a fetch. Records mean more may be
+  # waiting, so poll again at once; an empty fetch waits poll_interval, backing
+  # off towards max_poll_interval while the shard stays empty.
+  defp schedule_next_poll(state, records) do
+    state
+    |> count_empty_poll(records)
+    |> then(&replace_poll_timer(&1, next_poll_delay(&1, records)))
+  end
+
+  defp count_empty_poll(state, []), do: %{state | empty_polls: state.empty_polls + 1}
+  defp count_empty_poll(state, _records), do: %{state | empty_polls: 0}
+
+  # No demand left: wait for handle_demand/2 rather than polling (Kinesis
+  # rejects limit: 0).
+  defp next_poll_delay(%{demand: 0}, _records), do: nil
+  defp next_poll_delay(state, []), do: empty_poll_delay(state)
+  defp next_poll_delay(_state, _records), do: 0
+
+  defp empty_poll_delay(%{max_poll_interval: nil, poll_interval: interval}), do: interval
+
+  defp empty_poll_delay(%{max_poll_interval: max, poll_interval: interval, empty_polls: n}) do
+    (interval * Integer.pow(2, min(n - 1, 20)))
+    |> min(max)
+    |> max(interval)
+  end
+
+  # Cancels the poll still pending before arming the next. handle_demand/2
+  # fetches straight away, so without this a fetch made while a poll was
+  # pending armed a second timer beside it, and both kept renewing
+  # themselves: every new demand could add another poll loop for the shard.
+  defp replace_poll_timer(state, nil), do: %{cancel_poll_timer(state) | poll_timer: nil}
+
+  defp replace_poll_timer(state, delay) do
+    %{cancel_poll_timer(state) | poll_timer: schedule_shard_poll(delay)}
+  end
+
+  defp cancel_poll_timer(%{poll_timer: nil} = state), do: state
+
+  defp cancel_poll_timer(%{poll_timer: timer} = state) do
+    Process.cancel_timer(timer)
+    state
+  end
 
   defp get_shard_iterator(%{shard_iterator_type: :after_sequence_number} = state) do
     get_shard_iterator_with_retry(
@@ -543,6 +625,27 @@ defmodule KinesisClient.Stream.Shard.Producer do
     end)
   end
 
+  defp emitting(state, records) do
+    count = length(records)
+    %{state | demand: state.demand - count, in_flight: state.in_flight + count}
+  end
+
+  # Acks for messages emitted before a stop/restart can still arrive after
+  # the restart re-fetched them, so never let the count go negative.
+  defp acked(state, successful_msgs) do
+    %{state | in_flight: max(state.in_flight - length(successful_msgs), 0)}
+  end
+
+  # The records of the final fetch — and any still outstanding from earlier
+  # ones — must be acked (and so checkpointed) before the lease is marked
+  # completed: nothing reads a completed shard again, so closing first would
+  # lose them if this worker died before the ack.
+  defp maybe_close_shard(%{status: :closed, in_flight: 0} = state) do
+    handle_closed_shard(state)
+  end
+
+  defp maybe_close_shard(state), do: state
+
   defp handle_closed_shard(%{status: :closed, shard_closed_timer: nil, shutdown_delay: delay} = s) do
     timer = Process.send_after(self(), :shard_closed, delay)
 
@@ -595,9 +698,25 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   defp stop_if_lease_lost(_not_found_or_error, state), do: state
 
+  # The recorded poll is still pending, so this tick came from a timer that
+  # was replaced after it had already fired. The pending one will poll.
+  defp handle_poll_tick(remaining_ms, state) when is_integer(remaining_ms) do
+    Logger.debug(
+      "Ignoring a superseded poll tick, next poll in #{remaining_ms}ms: " <>
+        "[stream_name: #{state.stream_name}, shard_id: #{state.shard_id}]"
+    )
+
+    {:noreply, [], state}
+  end
+
+  defp handle_poll_tick(false, state) do
+    notify(:poll_timer_executed, state)
+    poll_for_records(state)
+  end
+
   # Nothing to fetch for: wait for demand instead of polling (Kinesis rejects
   # limit: 0). handle_demand/2 fetches as soon as a consumer asks for more.
-  defp poll_for_records(:owner, %{demand: 0} = state) do
+  defp poll_for_records(%{demand: 0} = state) do
     Logger.debug(
       "No pending demand, waiting for demand: [stream_name: #{state.stream_name}, shard_id: #{state.shard_id}]"
     )
@@ -605,37 +724,14 @@ defmodule KinesisClient.Stream.Shard.Producer do
     {:noreply, [], %{state | poll_timer: nil}}
   end
 
-  defp poll_for_records(:owner, state) do
+  # Lease ownership is checked once, inside the fetch (get_records_with_retry/2);
+  # a :not_owner or failed lookup there polls again after poll_interval.
+  defp poll_for_records(state) do
     Logger.debug(
       "Try to fulfill pending demand #{state.demand}: [stream_name: #{state.stream_name}, shard_id: #{state.shard_id}]"
     )
 
     get_records(%{state | poll_timer: nil})
-  end
-
-  # Keep polling rather than going idle: a :not_owner reading can be stale
-  # (Dynamo get_item is eventually consistent, so a producer started right
-  # after its worker took the lease can read the previous owner), and an idle
-  # :started producer is invisible to the lease process's stopped? check. If
-  # ownership really changed, the lease process stops us at its next tick and
-  # the stopped clause ignores the remaining ticks.
-  defp poll_for_records(:not_owner, state) do
-    Logger.debug(
-      "Lease owner is different, not getting records: [stream_name: #{state.stream_name}, shard_id: #{state.shard_id}]"
-    )
-
-    {:noreply, [], reschedule_poll(state)}
-  end
-
-  # The lease could not be read (e.g. the Repo pool was exhausted), so we don't
-  # know whether we still own the shard: neither fetch nor give up, poll again.
-  defp poll_for_records({:error, reason}, state) do
-    Logger.error(
-      "Shard #{state.shard_id} unable to verify lease ownership, polling again in " <>
-        "#{state.poll_interval}ms: #{inspect(reason)}"
-    )
-
-    {:noreply, [], reschedule_poll(state)}
   end
 
   defp retry_while_stopped(:owner, failed_msgs, state) do
