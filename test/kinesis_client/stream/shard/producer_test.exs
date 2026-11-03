@@ -476,12 +476,19 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
     # consumer asks, and the lease process calls start/1 on its own schedule.
     # Starting it then fetched with limit: 0, which Kinesis rejects with a
     # ValidationException (seen on generic_assessment_service staging).
-    for {label, checkpoint} <- [{"no checkpoint", nil}, {"a checkpoint", "12345"}] do
+    # The iterator is now fetched on the first demand rather than in start/1,
+    # so check it still starts where start/1 said: after the checkpoint, or
+    # at the configured iterator type when there is none.
+    for {label, checkpoint, iterator} <- [
+          {"no checkpoint", nil, {:trim_horizon, nil}},
+          {"a checkpoint", "12345", {:after_sequence_number, "12345"}}
+        ] do
       test "with #{label} and no pending demand waits for demand instead of fetching" do
-        opts = producer_opts()
+        opts = producer_opts(shard_iterator_type: :trim_horizon)
         {:ok, producer} = start_supervised({Producer, opts})
         test_pid = self()
         checkpoint = unquote(checkpoint)
+        {expected_type, expected_sequence_number} = unquote(iterator)
 
         AppStateMock
         |> stub(:get_lease, fn _app_name, _stream_name, _shard_id, _opts ->
@@ -489,7 +496,10 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
         end)
 
         KinesisMock
-        |> stub(:get_shard_iterator, fn _, _, _, _ -> {:ok, %{"ShardIterator" => "iterator"}} end)
+        |> stub(:get_shard_iterator, fn _, _, type, kinesis_opts ->
+          send(test_pid, {:iterator, type, kinesis_opts[:starting_sequence_number]})
+          {:ok, %{"ShardIterator" => "iterator"}}
+        end)
         |> stub(:get_records, fn _, kinesis_opts ->
           send(test_pid, {:get_records, kinesis_opts[:limit]})
           records = [%{"Data" => "foo", "SequenceNumber" => "12346"}]
@@ -498,12 +508,14 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
 
         assert :ok == Producer.start(producer)
         assert Producer.status(producer) == :started
-        refute_receive {:get_records, _limit}, 200
+        refute_receive {:iterator, _type, _sequence_number}, 200
+        refute_receive {:get_records, _limit}
 
         # Demand arriving later fetches right away, with a valid limit.
         {:ok, consumer} = start_supervised({KinesisClient.TestConsumer, self()})
         GenStage.sync_subscribe(consumer, to: producer, max_demand: 10, min_demand: 0)
 
+        assert_receive {:iterator, ^expected_type, ^expected_sequence_number}, 1_000
         assert_receive {:get_records, 10}, 1_000
         assert_receive {:consumer_events, [%{data: "foo"}]}, 1_000
       end
