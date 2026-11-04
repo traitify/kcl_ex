@@ -105,6 +105,33 @@ defmodule KinesisClient.Stream.AppState.EctoIntegrationTest do
     assert select_leases() == %{"shardId-000000000000" => {@app_name, "my_stream", "cp-exact"}}
   end
 
+  # TD-6722: the composite primary key is created with ADD PRIMARY KEY USING
+  # INDEX shard_lease_composite_unique, so Postgres names the constraint after
+  # the index. A changeset declaring any other constraint name makes Ecto
+  # re-raise the violation instead of returning :already_exists, which crashed
+  # the losing LeaseV2 whenever two workers raced to create the same lease.
+  test "create_lease/5 returns :already_exists on a duplicate instead of raising" do
+    assert AppStateEcto.initialize(@app_name, repo: PostgresRepo, stream_name: @stream_name) == :ok
+
+    create = fn owner ->
+      AppStateEcto.create_lease(@app_name, @stream_name, "shardId-000000000000", owner,
+        repo: PostgresRepo
+      )
+    end
+
+    assert create.("#{@stream_name}-worker-1") == :ok
+    assert create.("#{@stream_name}-worker-2") == :already_exists
+
+    # Without the index, the primary key (named after its source index) is
+    # what reports the violation; it must be declared too.
+    PostgresRepo.query!("DROP INDEX shard_lease_shard_id_app_name_stream_name_index")
+    assert create.("#{@stream_name}-worker-3") == :already_exists
+
+    # The first worker keeps the lease
+    %{rows: [["#{@stream_name}-worker-1"]]} =
+      PostgresRepo.query!("SELECT lease_owner FROM shard_lease")
+  end
+
   defp create_legacy_table do
     Enum.each(AppStateEcto.pre_backfill_migrations(), fn {version, module} ->
       Ecto.Migrator.up(PostgresRepo, version, module, log: false)

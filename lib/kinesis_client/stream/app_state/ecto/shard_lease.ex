@@ -23,7 +23,17 @@ defmodule KinesisClient.Stream.AppState.Ecto.ShardLease do
   def changeset(shard_lease, attrs) do
     shard_lease
     |> cast(attrs, @fields)
-    |> unique_constraint([:shard_id, :app_name, :stream_name], name: :shard_lease_pkey)
+    # A migrated table enforces uniqueness twice: the unique index from
+    # AddAdditionalUniqueConstraints (Ecto's default name, below) and the
+    # primary key, which UpdateShardLeasePrimaryKey builds with ADD PRIMARY KEY
+    # USING INDEX shard_lease_composite_unique, so Postgres names the
+    # constraint after that index — never shard_lease_pkey. Postgres reports
+    # whichever it checks first, and a violation on an undeclared name
+    # re-raises Ecto.ConstraintError instead of becoming :already_exists.
+    |> unique_constraint([:shard_id, :app_name, :stream_name])
+    |> unique_constraint([:shard_id, :app_name, :stream_name],
+      name: :shard_lease_composite_unique
+    )
   end
 
   def query do
