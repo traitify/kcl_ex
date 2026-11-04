@@ -14,6 +14,12 @@ defmodule KinesisClient.Stream.Shard.Producer do
 
   @default_records_limit 500
 
+  # A shard iterator expires 5 minutes after it is issued, so an idle poll
+  # that waits that long always finds it expired and re-derives it (see
+  # maybe_end_of_shard_reached/2 for :expired_iterator). Cap the backoff with
+  # a minute of headroom for the call itself and clock skew.
+  @max_poll_interval_limit 240_000
+
   require Logger
 
   defstruct [
@@ -85,7 +91,7 @@ defmodule KinesisClient.Stream.Shard.Producer do
       app_state_opts: Keyword.get(opts, :app_state_opts, []),
       shard_iterator_type: Keyword.get(opts, :shard_iterator_type),
       poll_interval: Keyword.get(opts, :poll_interval, 5_000),
-      max_poll_interval: Keyword.get(opts, :max_poll_interval),
+      max_poll_interval: opts |> Keyword.get(:max_poll_interval) |> cap_max_poll_interval(opts),
       notify_pid: Keyword.get(opts, :notify_pid),
       coordinator_name: opts[:coordinator_name],
       demand_limit: set_demand_limit(opts[:kinesis_opts])
@@ -742,10 +748,14 @@ defmodule KinesisClient.Stream.Shard.Producer do
     {:noreply, failed_msgs, state}
   end
 
-  defp retry_while_stopped(:not_owner, _failed_msgs, state) do
+  # Dropped, not re-emitted: no ack will ever settle them, so take them out
+  # of in_flight here. Otherwise a lease that comes back to this worker
+  # (steal-back, flap) would never see in_flight reach 0 at the shard's end,
+  # never write completed, and never start the child shards.
+  defp retry_while_stopped(:not_owner, failed_msgs, state) do
     Logger.debug("Stop retrying because the owner of shard #{state.shard_id} has changed")
 
-    {:noreply, [], state}
+    {:noreply, [], acked(state, failed_msgs)}
   end
 
   # Unknown ownership: keep retrying. The failed messages come back through
@@ -834,6 +844,19 @@ defmodule KinesisClient.Stream.Shard.Producer do
       nil ->
         :ok
     end
+  end
+
+  defp cap_max_poll_interval(nil, _opts), do: nil
+
+  defp cap_max_poll_interval(max, _opts) when max <= @max_poll_interval_limit, do: max
+
+  defp cap_max_poll_interval(max, opts) do
+    Logger.warning(
+      "Shard #{opts[:shard_id]} max_poll_interval #{max}ms exceeds the shard iterator " <>
+        "lifetime, capping it at #{@max_poll_interval_limit}ms"
+    )
+
+    @max_poll_interval_limit
   end
 
   defp set_demand_limit(nil), do: @default_records_limit

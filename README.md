@@ -53,7 +53,8 @@ opts = [
   # AppState reads on every shard even when the stream is idle. Default: 5_000
   poll_interval: 500,
   # optional, back off consecutive empty polls: the wait doubles from
-  # poll_interval up to this cap and resets when records arrive.
+  # poll_interval up to this cap and resets when records arrive. Capped at
+  # 240_000: a shard iterator expires after 5 minutes unused.
   # Default: not set (fixed poll_interval)
   max_poll_interval: 10_000,
   processors: [

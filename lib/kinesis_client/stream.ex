@@ -37,7 +37,8 @@ defmodule KinesisClient.Stream do
       immediately. Defaults to 5,000.
     * `:max_poll_interval`(optional) - When set, each consecutive empty `GetRecords` call doubles
       the wait, starting at `:poll_interval` and capped at this value (in milliseconds); the wait
-      returns to `:poll_interval` as soon as records arrive. Not set by default (fixed interval).
+      returns to `:poll_interval` as soon as records arrive. Values above 240,000 are capped there,
+      since a shard iterator expires after 5 minutes unused. Not set by default (fixed interval).
   """
   def start_link(opts) do
     Supervisor.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))

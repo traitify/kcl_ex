@@ -291,7 +291,7 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
       KinesisMock
       |> stub(:get_shard_iterator, fn _, _, _, _ -> {:ok, %{"ShardIterator" => "iterator"}} end)
 
-      %{producer: producer, consumer: consumer}
+      %{producer: producer, consumer: consumer, lease_owner: opts[:lease_owner]}
     end
 
     test "marks the shard completed only once every tail record is acked", ctx do
@@ -357,6 +357,40 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
       refute_receive :close_shard_called, 200
 
       send(ctx.producer, {:ack, make_ref(), [msg_b], []})
+      assert_receive :close_shard_called, 1_000
+    end
+
+    test "failed records dropped while another worker owns the lease do not hold the close",
+         ctx do
+      records = [
+        %{"Data" => "a", "SequenceNumber" => "1"},
+        %{"Data" => "b", "SequenceNumber" => "2"}
+      ]
+
+      KinesisMock
+      |> expect(:get_records, fn _, _ ->
+        {:ok, %{"NextShardIterator" => "next", "Records" => records}}
+      end)
+      |> expect(:get_records, fn _, _ -> {:ok, %{"ChildShards" => [], "Records" => []}} end)
+
+      GenStage.sync_subscribe(ctx.consumer, to: ctx.producer, max_demand: 10, min_demand: 0)
+      assert_receive {:consumer_events, [msg_a, msg_b]}, 1_000
+
+      # The lease moves to another worker and the lease process stops us; the
+      # retry for the failed batch is dropped because we no longer own the shard.
+      assert Producer.stop(ctx.producer) == :ok
+      stub(AppStateMock, :get_lease, fn _, _, _, _ -> %{lease_owner: worker_ref()} end)
+
+      send(ctx.producer, {:ack, make_ref(), [], [msg_a, msg_b]})
+      refute_receive {:consumer_events, _}, 200
+      assert :sys.get_state(ctx.producer).state.in_flight == 0
+
+      # The lease comes back (steal-back or flap) and the shard reaches its end.
+      stub(AppStateMock, :get_lease, fn _, _, _, _ ->
+        %{lease_owner: ctx.lease_owner, checkpoint: nil, completed: false}
+      end)
+
+      assert Producer.start(ctx.producer) == :ok
       assert_receive :close_shard_called, 1_000
     end
 
@@ -791,6 +825,13 @@ defmodule KinesisClient.Stream.Shard.ProducerTest do
 
       assert_receive {:consumer_events, _}, 1_000
       assert :sys.get_state(producer).state.empty_polls == 0
+    end
+
+    test "max_poll_interval is capped below the 5-minute shard iterator lifetime" do
+      opts = producer_opts(status: :started, poll_interval: 100, max_poll_interval: 600_000)
+      {:ok, producer} = start_supervised({Producer, opts})
+
+      assert :sys.get_state(producer).state.max_poll_interval == 240_000
     end
 
     test "polls at a fixed poll_interval when max_poll_interval is not set" do
